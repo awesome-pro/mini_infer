@@ -56,7 +56,7 @@ def tiny_config(**overrides) -> EngineConfig:
 
 
 class NullScheduler:
-    def schedule(self, waiting, running, *, now, budget) -> SchedulerOutput:
+    def schedule(self, waiting, running, *, now, budget, memory=None) -> SchedulerOutput:
         return SchedulerOutput(work=())
 
 
@@ -134,9 +134,11 @@ def check_scheduled_work_validation() -> None:
     req.on_prefill(4)
     expect_raises(
         ValueError,
-        "exactly one token",
+        "at most one token",
         lambda: ScheduledWork(request=req, num_new_tokens=3, kind=ScheduledKind.DECODE),
     )
+    zero_decode = ScheduledWork(request=req, num_new_tokens=0, kind=ScheduledKind.DECODE)
+    assert zero_decode.num_new_tokens == 0, "a decode may be deferred without producing a token"
 
 
 def check_scheduler_output_aggregation() -> None:
@@ -341,8 +343,8 @@ def check_event_lifecycle() -> None:
     assert steps[0].events_of(StepEventKind.PREFILLED)[0].num_tokens == 4
 
 
-def check_zero_output_budget_still_completes() -> None:
-    """A request always decodes at least once, then the budget stops it."""
+def check_zero_output_budget_finishes_after_prefill() -> None:
+    """max_new_tokens=0 must finish at prefill, never decode forever."""
     engine = Engine(tiny_config())
     req = engine.submit(make_request(4, 0))
 
@@ -350,16 +352,22 @@ def check_zero_output_budget_still_completes() -> None:
 
     assert steps[0].num_prefill_tokens == 4
     assert req.status is RequestStatus.FINISHED
-    assert req.generated_tokens == [0]
+    assert req.generated_tokens == []
     assert engine.finished == [req]
+    assert all(s.num_decode_requests == 0 for s in steps)
 
 
-def check_idle_engine_terminates() -> None:
-    engine = Engine(tiny_config(), scheduler=NullScheduler())
+def check_idle_engine_terminates_and_reports_the_stall() -> None:
+    """A policy that plans nothing must not spin forever."""
+    engine = Engine(tiny_config(), scheduler=NullScheduler(), max_stalled_steps=2)
     engine.submit(make_request(2, 1))
 
-    assert engine.run_to_completion() == []
+    steps = engine.run_to_completion()
+
+    assert len(steps) == 2, "the engine tolerates max_stalled_steps idle steps, then gives up"
+    assert all(s.is_stalled for s in steps), "every step made no progress"
     assert engine.waiting, "unscheduled work must remain queued"
+    assert engine.finished == []
 
 
 def check_step_duration_matches_cost_model() -> None:
@@ -425,8 +433,8 @@ def main() -> int:
     check("past arrival clamped", check_past_arrival_is_clamped)
     check("duplicate ids rejected", check_duplicate_ids_rejected)
     check("event lifecycle", check_event_lifecycle)
-    check("zero output budget still completes", check_zero_output_budget_still_completes)
-    check("idle engine terminates", check_idle_engine_terminates)
+    check("zero output budget finishes at prefill", check_zero_output_budget_finishes_after_prefill)
+    check("idle engine terminates and reports its stall", check_idle_engine_terminates_and_reports_the_stall)
     check("step duration matches cost model", check_step_duration_matches_cost_model)
     check("decode cost scales with context", check_decode_cost_scales_with_context)
     return report("phase 1 skeleton")

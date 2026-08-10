@@ -6,6 +6,8 @@ import itertools
 from dataclasses import dataclass, field
 from enum import Enum
 
+from mini_infer.block_table import BlockTable
+
 _id_counter = itertools.count()
 
 
@@ -47,7 +49,7 @@ class Request:
     generated_tokens: list[int] = field(default_factory=list)
 
     # Physical blocks holding this request's KV, indexed by logical block.
-    block_table: list[int] = field(default_factory=list)
+    block_table: BlockTable = field(default_factory=BlockTable)
 
     first_token_time: float | None = None
     finish_time: float | None = None
@@ -100,19 +102,23 @@ class Request:
         self.admitted_step = step
 
     def on_prefill(self, num_tokens: int) -> None:
-        if num_tokens < 1:
-            raise ValueError(f"{self.id}: prefill chunk must be positive")
+        """Advance the prefill cursor.
+
+        Zero tokens is legal: it claims a running slot when the KV pool cannot
+        fund any prefill work this step, without pretending tokens were cached.
+        """
+        if num_tokens < 0:
+            raise ValueError(f"{self.id}: prefill chunk must be non-negative")
         if self.prefilled_tokens + num_tokens > self.prompt_len:
             raise ValueError(
                 f"{self.id}: prefill of {num_tokens} tokens would exceed prompt "
                 f"({self.prefilled_tokens}/{self.prompt_len})"
             )
         self.prefilled_tokens += num_tokens
-        self.status = (
-            RequestStatus.DECODING
-            if self.prefilled_tokens == self.prompt_len
-            else RequestStatus.PREFILLING
-        )
+        if self.prefilled_tokens == self.prompt_len:
+            self.status = RequestStatus.DECODING
+        elif num_tokens > 0:
+            self.status = RequestStatus.PREFILLING
 
     def on_decode(self, token: int, now: float) -> None:
         """Record one generated token. Returns nothing; callers check stopping."""
@@ -132,3 +138,7 @@ class Request:
     def on_finished(self, now: float) -> None:
         self.status = RequestStatus.FINISHED
         self.finish_time = now
+
+    def mark_complete(self) -> None:
+        """Flag the request as done during scheduling, for prefill-only requests."""
+        self.status = RequestStatus.FINISHED

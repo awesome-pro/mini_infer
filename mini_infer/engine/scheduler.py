@@ -39,9 +39,9 @@ class ScheduledWork:
                 f"{self.request_id}: scheduled tokens must be non-negative, "
                 f"got {self.num_new_tokens}"
             )
-        if self.kind is ScheduledKind.DECODE and self.num_new_tokens != 1:
+        if self.kind is ScheduledKind.DECODE and self.num_new_tokens > 1:
             raise ValueError(
-                f"{self.request_id}: a decode step produces exactly one token, "
+                f"{self.request_id}: a decode step produces at most one token, "
                 f"got {self.num_new_tokens}"
             )
         if self.kind is ScheduledKind.PREFILL:
