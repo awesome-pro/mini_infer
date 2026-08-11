@@ -8,7 +8,7 @@ prefills and single-token decodes.
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from mini_infer.engine.request import Request
@@ -54,9 +54,17 @@ class ScheduledWork:
 
 @dataclass(frozen=True, slots=True)
 class SchedulerOutput:
-    """Everything that executes in one engine step."""
+    """Everything that executes in one engine step, plus any KV evictions it needs."""
 
     work: Sequence[ScheduledWork]
+    #: Victim request id -> the request whose work required the eviction. The
+    #: scheduler frees a victim's blocks while planning; the engine is responsible
+    #: for rewinding the victim's state so its prefill will be recomputed.
+    preemptions: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def num_preemptions(self) -> int:
+        return len(self.preemptions)
 
     @property
     def num_scheduled_tokens(self) -> int:

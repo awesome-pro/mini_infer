@@ -193,14 +193,21 @@ def check_kv_limits_prefill_chunk_size() -> None:
     assert engine.memory.num_free_blocks() == 0
 
 
-def check_granted_chunk_can_shrink_but_never_grow() -> None:
+def check_chunk_size_is_limited_by_free_blocks() -> None:
+    """The chunk cap is an upper bound; memory can only lower it."""
     memory = PagedBlockManager(num_blocks=4, block_size=8)
     request = make_request(100, 1)
 
+    # 4 free blocks cover 32 tokens, which is below the 64-token cap.
     assert memory.max_prefill_chunk(request, chunk_cap=64) == 32
+    assert memory.max_prefill_chunk(request, chunk_cap=16) == 16, "the cap is still an upper bound"
 
     memory.grow_to(request, 16)
-    assert memory.max_prefill_chunk(request, chunk_cap=64) < 32, "the cap still binds"
+    request.on_prefill(16)
+    assert memory.num_free_blocks() == 2
+    assert memory.max_prefill_chunk(request, chunk_cap=64) == 16, (
+        "free blocks now only extend coverage by 16 more tokens"
+    )
 
 
 def check_admission_control_waits_instead_of_overcommitting() -> None:
@@ -321,7 +328,7 @@ def main() -> int:
     check("stats report fragmentation", check_stats_report_fragmentation)
     check("engine blocks match each sequence", check_engine_allocates_blocks_that_match_each_sequence)
     check("KV limits prefill chunk size", check_kv_limits_prefill_chunk_size)
-    check("chunk cap still binds under memory limits", check_granted_chunk_can_shrink_but_never_grow)
+    check("chunk size is limited by free blocks", check_chunk_size_is_limited_by_free_blocks)
     check("admission control refuses what cannot fit", check_admission_control_waits_instead_of_overcommitting)
     check("unfittable request stalls cleanly", check_unfittable_request_stalls_cleanly_instead_of_corrupting_kv)
     check("finished requests release KV for the next", check_finished_requests_return_their_kv_for_the_next_one)

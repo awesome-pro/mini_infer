@@ -6,6 +6,11 @@ over the physical tensors here, so this is deliberately not called PagedAttentio
 """
 
 from mini_infer.block_table import BlockTable
-from mini_infer.memory.block_manager import BlockManager, MemoryStats, PagedBlockManager
+from mini_infer.memory.block_manager import (
+    BlockManager,
+    BlockPlan,
+    MemoryStats,
+    PagedBlockManager,
+)
 
-__all__ = ["BlockManager", "BlockTable", "MemoryStats", "PagedBlockManager"]
+__all__ = ["BlockManager", "BlockPlan", "BlockTable", "MemoryStats", "PagedBlockManager"]

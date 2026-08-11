@@ -51,6 +51,7 @@ class Request:
     # Physical blocks holding this request's KV, indexed by logical block.
     block_table: BlockTable = field(default_factory=BlockTable)
 
+
     first_token_time: float | None = None
     finish_time: float | None = None
 
@@ -79,6 +80,17 @@ class Request:
     @property
     def remaining_prefill(self) -> int:
         return self.prompt_len - self.prefilled_tokens
+
+    @property
+    def kv_target_tokens(self) -> int:
+        """KV slots the request's block table must cover.
+
+        Always the full sequence: a block table covers a prefix of the sequence, so
+        the cache grows with the sequence. After preemption the table is empty and
+        the recomputation rebuilds that same coverage from the start, which is why
+        the requirement never needs to shrink.
+        """
+        return self.sequence_len
 
     @property
     def is_finished(self) -> bool:
@@ -129,7 +141,11 @@ class Request:
             self.first_token_time = now
 
     def on_preempted(self) -> None:
-        """KV blocks were reclaimed: rewind the prefill cursor so it can be recomputed."""
+        """KV blocks were reclaimed: rewind the prefill cursor so it can be recomputed.
+
+        The output tokens generated before eviction are kept: the recomputation
+        prefills the prompt again and re-caches them, so no output is lost.
+        """
         self.status = RequestStatus.PREEMPTED
         self.prefilled_tokens = 0
         self.block_table.clear()
@@ -138,6 +154,7 @@ class Request:
     def on_finished(self, now: float) -> None:
         self.status = RequestStatus.FINISHED
         self.finish_time = now
+
 
     def mark_complete(self) -> None:
         """Flag the request as done during scheduling, for prefill-only requests."""

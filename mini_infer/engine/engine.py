@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import heapq
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol
 
@@ -49,6 +49,7 @@ class EngineStep:
     events: tuple[StepEvent, ...] = ()
     free_blocks: int | None = None
     total_blocks: int | None = None
+    preemptions: dict[str, str] = field(default_factory=dict)
     progress: tuple = ()
     previous_progress: tuple = ()
 
@@ -63,6 +64,10 @@ class EngineStep:
     @property
     def num_decode_requests(self) -> int:
         return self.output.num_decode_requests
+
+    @property
+    def num_preemptions(self) -> int:
+        return len(self.preemptions)
 
     @property
     def kv_utilization(self) -> float:
@@ -228,10 +233,13 @@ class Engine:
 
         # Order matters: record the pre-step lengths, advance state, hand the KV of
         # finished requests back to the pool, then grow what is still running.
-        previous = {work.request_id: work.request.sequence_len for work in output.work}
         events = self._apply(output, sampled.sampled_tokens, end)
+        # The scheduler already returned the victims' blocks to the pool; rewinding
+        # their state must therefore happen before anything is allocated.
+        preemption_events = self._apply_preemptions(output.preemptions)
+        events.extend(preemption_events)
         self._release_finished_kv()
-        self._allocate_kv(output, previous)
+        self._allocate_kv(output)
 
         step = EngineStep(
             index=self._step_index,
@@ -241,6 +249,7 @@ class Engine:
             events=tuple(events),
             free_blocks=self.memory.num_free_blocks() if self.memory else None,
             total_blocks=self.memory.num_blocks if self.memory else None,
+            preemptions=dict(output.preemptions),
             progress=self._progress_fingerprint(),
             previous_progress=progress_before,
         )
@@ -358,6 +367,31 @@ class Engine:
 
     # ----------------------------------------------------------------- memory
 
+    def _apply_preemptions(self, preemptions: dict[str, str]) -> list[StepEvent]:
+        """Rewind each evicted request so its prefill will be recomputed.
+
+        The scheduler has already freed the victim's blocks; this resets the
+        request's own state (prefill cursor, status) and re-queues it, so it
+        recomputes from scratch the next time it is admitted.
+        """
+        events: list[StepEvent] = []
+        for victim_id, requester_id in preemptions.items():
+            victim = self.requests.get(victim_id)
+            if victim is None:  # pragma: no cover - defensive
+                continue
+            self.running.pop(victim_id, None)
+            victim.on_preempted()
+            if all(r.id != victim_id for r in self.waiting):
+                self.waiting.append(victim)
+            events.append(
+                StepEvent(
+                    StepEventKind.PREEMPTED,
+                    victim_id,
+                    detail=f"evicted for {requester_id}",
+                )
+            )
+        return events
+
     def _release_finished_kv(self) -> None:
         """Return the KV of every finished request to the pool, exactly once.
 
@@ -389,27 +423,29 @@ class Engine:
             ),
         )
 
-    def _allocate_kv(self, output: SchedulerOutput, previous: dict[str, int]) -> None:
-        """Grow each scheduled request's block table to cover its new tokens.
+    def _allocate_kv(self, output: SchedulerOutput) -> None:
+        """Grow each scheduled request's block table to cover the KV it now needs.
 
         Allocation happens after execution, from the tokens that were actually
-        cached, so the block table always matches the request's real sequence.
+        cached, so a request's coverage always matches what the runner produced.
         """
         if self.memory is None:
             return
         for work in output.work:
             request = work.request
-            delta = request.sequence_len - previous[work.request_id]
-            if delta <= 0:
-                continue
             if request.is_finished:
                 # Finished in this step: its KV is released in the same step, so
                 # allocating for tokens that are already dead would only force the
                 # pool to over-commit. Skipping it is what lets a request produce
                 # its final token from the pool's last block.
                 continue
-            self.memory.grow_to(request, request.sequence_len)
-
+            # The block table must cover the whole sequence. During recomputation
+            # the sequence already includes the anchors being re-cached, so the
+            # allocation grows exactly as the prompt is prefilled again.
+            target = request.sequence_len
+            if target <= request.block_table.num_blocks * self.memory.block_size:
+                continue
+            self.memory.grow_to(request, target)
 
 def _build_default_scheduler(
     config: EngineConfig, *, memory: PagedBlockManager | None
