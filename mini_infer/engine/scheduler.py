@@ -45,10 +45,11 @@ class ScheduledWork:
                 f"got {self.num_new_tokens}"
             )
         if self.kind is ScheduledKind.PREFILL:
-            if self.num_new_tokens > self.request.remaining_prefill:
+            uncomputed = self.request.num_uncomputed_tokens
+            if self.num_new_tokens > uncomputed:
                 raise ValueError(
                     f"{self.request_id}: prefill chunk {self.num_new_tokens} exceeds "
-                    f"remaining {self.request.remaining_prefill}"
+                    f"the {uncomputed} uncomputed positions"
                 )
 
 
@@ -57,14 +58,20 @@ class SchedulerOutput:
     """Everything that executes in one engine step, plus any KV evictions it needs."""
 
     work: Sequence[ScheduledWork]
-    #: Victim request id -> the request whose work required the eviction. The
-    #: scheduler frees a victim's blocks while planning; the engine is responsible
-    #: for rewinding the victim's state so its prefill will be recomputed.
+    #: Victim request id -> the request whose work required the eviction. Planning
+    #: only decides this; the engine releases the blocks and rewinds the victim.
     preemptions: dict[str, str] = field(default_factory=dict)
+    #: Extra physical blocks each scheduled request needs for this step's work,
+    #: computed while planning. The engine commits exactly this.
+    allocations: dict[str, int] = field(default_factory=dict)
 
     @property
     def num_preemptions(self) -> int:
         return len(self.preemptions)
+
+    @property
+    def num_blocks_allocated(self) -> int:
+        return sum(self.allocations.values())
 
     @property
     def num_scheduled_tokens(self) -> int:

@@ -22,7 +22,11 @@ from collections.abc import Sequence
 from mini_infer.config import EngineConfig
 from mini_infer.engine.request import Request, RequestStatus
 from mini_infer.engine.scheduler import ScheduledKind, SchedulerOutput, ScheduledWork
-from mini_infer.memory.block_manager import BlockPlan, PagedBlockManager
+from mini_infer.memory.block_manager import (
+    BlockPlan,
+    PagedBlockManager,
+    blocks_for_tokens,
+)
 
 PHASE_ORDER = ("decode", "prefill")
 
@@ -41,9 +45,8 @@ class SchedulerBase:
         self.config = config
         self.memory = memory
         #: Transactional view of the KV pool for the step being planned.
-        self.plan = BlockPlan(memory) if memory is not None else None
+        self.plan: BlockPlan | None = BlockPlan(memory) if memory is not None else None
         self._requirements: dict[str, int] = {}
-        self._preempted_this_step: set[str] = set()
 
     # ------------------------------------------------------------- interfaces
 
@@ -63,20 +66,23 @@ class SchedulerBase:
         self._build_plan(work, waiting, running, budget)
         preemptions = self._evict_to_fund(work, running, waiting)
         if preemptions:
-            # Victims have been evicted and their blocks returned, so re-plan to
-            # use the freed memory and to guarantee no evicted request still holds
-            # work in the plan.
-            self._reset_step_state(keep_preempted=True)
+            # The plan now knows which blocks those evictions free, so re-planning
+            # uses them. Nothing has been committed yet: the engine applies the
+            # frees and the allocation together, after the runner has succeeded.
+            self._reset_step_state()
+            self.plan = BlockPlan(self.memory, victims=self.plan.victims())
             work = []
             self._build_plan(work, waiting, running, budget)
 
-        return SchedulerOutput(work=tuple(work), preemptions=preemptions)
+        return SchedulerOutput(
+            work=tuple(work),
+            preemptions=preemptions,
+            allocations=self.plan.claims() if self.plan is not None else {},
+        )
 
-    def _reset_step_state(self, *, keep_preempted: bool = False) -> None:
+    def _reset_step_state(self) -> None:
         self.plan = BlockPlan(self.memory) if self.memory is not None else None
         self._requirements = {}
-        if not keep_preempted:
-            self._preempted_this_step = set()
 
     def _build_plan(
         self,
@@ -114,7 +120,7 @@ class SchedulerBase:
             if request.status is not RequestStatus.DECODING:
                 # A request still mid-prompt is served by the prefill phase.
                 continue
-            if request.is_finished or request.id in self._preempted_this_step:
+            if request.is_finished or (plan is not None and plan.is_evicted(request.id)):
                 continue
             if request.is_complete:
                 # Output budget already spent: hand it to the engine to finalise
@@ -158,7 +164,9 @@ class SchedulerBase:
         occupied = len(active)
 
         for request in sorted(candidates, key=self.prefill_order_key):
-            if request.remaining_prefill == 0 or request.id in self._preempted_this_step:
+            if request.num_uncomputed_tokens == 0 or (
+                self.plan is not None and self.plan.is_evicted(request.id)
+            ):
                 continue
             new_admission = request.id not in active
             if new_admission and occupied >= self.config.max_running_requests:
@@ -181,7 +189,7 @@ class SchedulerBase:
             )
             used += chunk
             if self.plan is not None:
-                target = request.sequence_len + chunk
+                target = request.num_computed_tokens + chunk
                 needed = self.plan.manager.blocks_needed_to_reach(request, target)
                 self.plan.claim(
                     request.id, max(0, needed - request.block_table.num_blocks)
@@ -206,22 +214,34 @@ class SchedulerBase:
         if memory is None or not self.config.enable_preemption:
             return {}
 
-        pool = list(running) + list(waiting)
+        assert self.plan is not None
+        pool = {r.id: r for r in list(running) + list(waiting)}
         preemptions: dict[str, str] = {}
-        for requester_id, blocks_needed in self._requirements.items():
-            if blocks_needed <= memory.num_free_blocks():
-                continue
-            requester = next((r for r in pool if r.id == requester_id), None)
+        # Requests still needing funding. A victim stops needing memory and its
+        # blocks count towards every later requirement.
+        remaining = {
+            req_id: blocks
+            for req_id, blocks in self._requirements.items()
+            if not self.plan.is_evicted(req_id)
+        }
+
+        for requester_id, blocks_needed in list(remaining.items()):
+            requester = pool.get(requester_id)
             if requester is None:  # pragma: no cover - defensive
                 continue
-            for victim in sorted(pool, key=self.preemption_key):
-                if blocks_needed <= memory.num_free_blocks():
+            for victim in sorted(pool.values(), key=self.preemption_key):
+                if blocks_needed <= self.plan.free_blocks(requester_id):
                     break
                 if not self._can_preempt(victim, requester):
                     continue
-                memory.free(victim)
+                freed = blocks_for_tokens(
+                    victim.num_computed_tokens, self.plan.block_size
+                )
+                if freed <= 0:
+                    continue
+                self.plan.evict(victim.id, freed)
                 preemptions[victim.id] = requester_id
-                self._preempted_this_step.add(victim.id)
+                remaining.pop(victim.id, None)
         if not preemptions:
             return {}
         work[:] = [item for item in work if item.request_id not in preemptions]
@@ -233,7 +253,8 @@ class SchedulerBase:
             return False
         if victim.status not in (RequestStatus.DECODING, RequestStatus.PREFILLING):
             return False
-        if victim.id in self._preempted_this_step:
+        assert self.plan is not None
+        if self.plan.is_evicted(victim.id):
             return False
         return self._evictable(victim, requester)
 
@@ -266,13 +287,15 @@ class SchedulerBase:
     def _decode_extra_blocks(self, request: Request) -> int:
         """Blocks the request's next decode token needs beyond what it holds."""
         assert self.plan is not None
-        needed = self.plan.manager.blocks_needed_to_reach(request, request.sequence_len + 1)
+        needed = self.plan.manager.blocks_needed_to_reach(
+            request, request.num_tokens + 1
+        )
         return max(0, needed - request.block_table.num_blocks)
 
     def _blocks_for_prefill(self, request: Request) -> int:
         """Blocks the request needs to prefill its whole remaining prompt."""
         assert self.plan is not None
-        target = request.sequence_len + request.remaining_prefill
+        target = request.num_tokens
         needed = self.plan.manager.blocks_needed_to_reach(request, target)
         return max(0, needed - request.block_table.num_blocks)
 
@@ -283,7 +306,7 @@ class SchedulerBase:
 
     def _chunk_size(self, request: Request, remaining_budget: int) -> int:
         """Prefill tokens to grant, clamped by the chunk cap, budget and KV pool."""
-        cap = min(request.remaining_prefill, self._chunk_cap(), remaining_budget)
+        cap = min(request.num_uncomputed_tokens, self._chunk_cap(), remaining_budget)
         if self.plan is None:
             return max(0, cap)
         # The cap passed down must be the policy's own limit, never a chunk already

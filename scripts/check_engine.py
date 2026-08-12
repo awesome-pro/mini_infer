@@ -66,20 +66,20 @@ class NullScheduler:
 def check_request_lifecycle() -> None:
     req = make_request(10, 4)
     assert req.status is RequestStatus.WAITING
-    assert req.remaining_prefill == 10
-    assert req.sequence_len == 0
+    assert req.num_tokens == 10, "the sequence starts as the prompt"
+    assert req.num_uncomputed_tokens == 10, "and none of it is computed yet"
 
     req.on_prefill(4)
     assert req.status is RequestStatus.PREFILLING
-    assert req.prefilled_tokens == 4
+    assert req.num_computed_tokens == 4
 
     req.on_prefill(6)
     assert req.status is RequestStatus.DECODING
-    assert req.remaining_prefill == 0
+    assert req.num_uncomputed_tokens == 0
 
     req.on_decode(token=7, now=0.5)
     assert req.first_token_time == 0.5
-    assert req.sequence_len == 11
+    assert req.num_tokens == 11, "decoding extends the sequence at the tail"
 
     req.on_finished(now=0.9)
     assert req.status is RequestStatus.FINISHED
@@ -93,7 +93,7 @@ def check_request_validation() -> None:
     expect_raises(ValueError, "max_new_tokens", lambda: make_request(4, -1))
 
     req = make_request(5, 1)
-    expect_raises(ValueError, "exceed prompt", lambda: req.on_prefill(6))
+    expect_raises(ValueError, "pass the sequence end", lambda: req.on_prefill(6))
     expect_raises(ValueError, "cannot decode", lambda: req.on_decode(token=1, now=0.0))
 
 
@@ -106,7 +106,7 @@ def check_preemption_rewinds_prefill() -> None:
     req.on_preempted()
 
     assert req.status is RequestStatus.PREEMPTED
-    assert req.prefilled_tokens == 0
+    assert req.num_computed_tokens == 0
     assert req.block_table == []
     assert req.num_preemptions == 1
     assert req.generated_tokens == [1], "generated tokens survive preemption (recompute path)"
@@ -114,7 +114,7 @@ def check_preemption_rewinds_prefill() -> None:
     req.on_admitted(step=7)
     req.on_prefill(6)
     assert req.status is RequestStatus.DECODING
-    assert req.sequence_len == 7, "recompute must restore prompt KV plus prior output"
+    assert req.num_tokens == 7, "recompute must restore prompt KV plus prior output"
 
 
 def check_scheduled_work_validation() -> None:
@@ -409,7 +409,7 @@ def check_decode_cost_scales_with_context() -> None:
     decode_step = next(s for s in steps if s.num_decode_requests)
 
     assert decode_step.duration == 0.005, "cost is paid over the full context length"
-    assert req.sequence_len == 5
+    assert req.num_tokens == 5
 
 
 def main() -> int:

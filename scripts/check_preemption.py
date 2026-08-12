@@ -88,7 +88,10 @@ def check_preemption_preserves_output_and_recomputes_prompt() -> None:
     for request in requests:
         assert request.status is RequestStatus.FINISHED, f"{request.id} did not finish"
         assert request.num_generated == 20, "no output token may be lost to recomputation"
-        assert request.prefilled_tokens == request.prompt_len, "prefill must be complete"
+        assert request.is_prefill_complete, "the whole prompt must end up computed"
+        assert request.num_computed_tokens == request.num_tokens, (
+            "a finished request has computed its entire sequence"
+        )
         # Finished requests release their KV, so a rebuilt table is already gone.
         assert request.block_table.num_blocks == 0
 
@@ -105,7 +108,7 @@ def check_every_step_has_consistent_blocks() -> None:
         memory.assert_invariants()
         for request in engine.requests.values():
             if request.status is RequestStatus.PREEMPTED:
-                assert request.prefilled_tokens == 0
+                assert request.num_computed_tokens == 0
                 assert request.block_table.num_blocks == 0
 
 
@@ -183,8 +186,45 @@ def check_no_thrashing_under_randomized_pressure() -> None:
     assert memory.num_free_blocks() == memory.num_blocks, "all KV must be reclaimed"
     for request in engine.requests.values():
         assert request.num_generated <= request.max_new_tokens
-        assert request.prefilled_tokens <= request.prompt_len
+        assert request.num_computed_tokens <= request.num_tokens
         assert request.block_table.num_blocks == 0
+
+
+def check_planning_never_mutates_memory() -> None:
+    """The scheduler decides; only the engine commits.
+
+    Planning must be speculative, so that a plan which is never applied (a failed
+    runner, an abandoned step) cannot leave physical memory moved.
+    """
+    engine = pressure_engine(num_blocks=16, block_size=8, preemption=True)
+    requests = [
+        engine.submit(make_request(8, 32, req_id=f"R{i}")) for i in range(4)
+    ]
+
+    checked = 0
+    for _ in range(60):
+        before = (
+            engine.memory.num_free_blocks(),
+            tuple(r.block_table.num_blocks for r in requests),
+        )
+        plan = engine.scheduler.schedule(
+            engine.waiting,
+            list(engine.running.values()),
+            now=engine.clock.now(),
+            budget=64,
+            memory=engine.memory,
+        )
+        after = (
+            engine.memory.num_free_blocks(),
+            tuple(r.block_table.num_blocks for r in requests),
+        )
+        assert before == after, "scheduling must not touch physical memory"
+        if plan.preemptions:
+            checked += 1
+        engine.step()
+
+    assert checked > 0, "this workload must plan at least one eviction"
+    assert engine.memory.num_free_blocks() == 16
 
 
 def check_preemption_events_are_reported() -> None:
@@ -206,6 +246,7 @@ def main() -> int:
     check("late requests get through under pressure", check_preemption_lets_late_requests_through)
     check("over-subscribed workloads stall cleanly", check_over_subscribed_workload_stalls_cleanly)
     check("randomized pressure terminates", check_no_thrashing_under_randomized_pressure)
+    check("planning never mutates memory", check_planning_never_mutates_memory)
     check("preemptions are reported as events", check_preemption_events_are_reported)
     return report("phase 3 recompute preemption")
 

@@ -34,9 +34,13 @@ class RequestStatus(str, Enum):
 class Request:
     """One generation request.
 
-    ``prefilled_tokens`` is the authoritative prefill cursor: it always equals
-    the number of prompt tokens whose KV entries exist in the cache, so a
-    preempted request simply rewinds it to zero.
+    The sequence is ``prompt_tokens + generated_tokens`` and grows at the tail.
+    ``num_computed_tokens`` is the single cursor over that sequence: it counts how
+    many leading positions have KV entries in the cache. Prefill advances it over
+    the prompt, decode extends the sequence and advances it by one, and preemption
+    rewinds it to zero so the sequence is recomputed from the start. There is no
+    separate prefill cursor, because the only question the engine ever asks is how
+    much of the sequence is cached.
     """
 
     prompt_tokens: list[int]
@@ -45,12 +49,11 @@ class Request:
     id: str = ""
 
     status: RequestStatus = RequestStatus.WAITING
-    prefilled_tokens: int = 0
     generated_tokens: list[int] = field(default_factory=list)
+    num_computed_tokens: int = 0
 
     # Physical blocks holding this request's KV, indexed by logical block.
     block_table: BlockTable = field(default_factory=BlockTable)
-
 
     first_token_time: float | None = None
     finish_time: float | None = None
@@ -59,6 +62,7 @@ class Request:
     admitted_step: int | None = None
     num_preemptions: int = 0
 
+
     def __post_init__(self) -> None:
         if not self.id:
             self.id = f"req-{next(_id_counter)}"
@@ -66,8 +70,10 @@ class Request:
             raise ValueError(f"{self.id}: max_new_tokens must be non-negative")
         if not self.prompt_tokens:
             raise ValueError(f"{self.id}: prompt_tokens must not be empty")
-        if self.prefilled_tokens < 0:
-            raise ValueError(f"{self.id}: prefilled_tokens must be non-negative")
+        if self.num_computed_tokens < 0:
+            raise ValueError(f"{self.id}: num_computed_tokens must be non-negative")
+
+    # ------------------------------------------------------------- geometry
 
     @property
     def prompt_len(self) -> int:
@@ -78,83 +84,92 @@ class Request:
         return len(self.generated_tokens)
 
     @property
-    def remaining_prefill(self) -> int:
-        return self.prompt_len - self.prefilled_tokens
+    def num_tokens(self) -> int:
+        """Total sequence length: everything the request will ever attend over so far."""
+        return len(self.prompt_tokens) + len(self.generated_tokens)
 
     @property
-    def kv_target_tokens(self) -> int:
-        """KV slots the request's block table must cover.
+    def num_uncomputed_tokens(self) -> int:
+        """Positions after the cursor that still need a forward pass.
 
-        Always the full sequence: a block table covers a prefix of the sequence, so
-        the cache grows with the sequence. After preemption the table is empty and
-        the recomputation rebuilds that same coverage from the start, which is why
-        the requirement never needs to shrink.
+        Normally this is the rest of the prompt. After preemption it also covers the
+        output tokens generated before eviction, whose KV the recomputation rebuilds.
         """
-        return self.sequence_len
+        return self.num_tokens - self.num_computed_tokens
 
     @property
-    def is_finished(self) -> bool:
-        return self.status is RequestStatus.FINISHED
+    def is_prefill_complete(self) -> bool:
+        """True once the whole prompt has KV, so decode may begin."""
+        return self.num_computed_tokens >= self.prompt_len
 
     @property
-    def sequence_len(self) -> int:
-        """Tokens whose KV exists: prefilled prompt tokens plus generated ones."""
-        return self.prefilled_tokens + len(self.generated_tokens)
+    def num_uncomputed_prompt_tokens(self) -> int:
+        """Prompt positions still to be computed, ignoring generated ones."""
+        return max(0, self.prompt_len - self.num_computed_tokens)
 
     @property
     def is_complete(self) -> bool:
         """True once the output budget is used up."""
         return len(self.generated_tokens) >= self.max_new_tokens
 
+    @property
+    def is_finished(self) -> bool:
+        """True once the request has been finalised by the engine."""
+        return self.status is RequestStatus.FINISHED
+
     def context_at_step(self, new_tokens: int) -> int:
         """Sequence length the cache must hold after ``new_tokens`` more tokens."""
-        return self.sequence_len + new_tokens
+        return self.num_computed_tokens + new_tokens
+
+    # ----------------------------------------------------------- transitions
 
     def on_admitted(self, step: int) -> None:
         self.admitted_step = step
 
     def on_prefill(self, num_tokens: int) -> None:
-        """Advance the prefill cursor.
+        """Advance the cursor over the sequence.
 
-        Zero tokens is legal: it claims a running slot when the KV pool cannot
-        fund any prefill work this step, without pretending tokens were cached.
+        Zero tokens is legal: it claims a running slot when the KV pool cannot fund
+        any work this step, without pretending a position was computed.
         """
         if num_tokens < 0:
             raise ValueError(f"{self.id}: prefill chunk must be non-negative")
-        if self.prefilled_tokens + num_tokens > self.prompt_len:
+        if self.num_computed_tokens + num_tokens > self.num_tokens:
             raise ValueError(
-                f"{self.id}: prefill of {num_tokens} tokens would exceed prompt "
-                f"({self.prefilled_tokens}/{self.prompt_len})"
+                f"{self.id}: computing {num_tokens} tokens would pass the sequence "
+                f"end ({self.num_computed_tokens}/{self.num_tokens})"
             )
-        self.prefilled_tokens += num_tokens
-        if self.prefilled_tokens == self.prompt_len:
-            self.status = RequestStatus.DECODING
-        elif num_tokens > 0:
-            self.status = RequestStatus.PREFILLING
+        self.num_computed_tokens += num_tokens
+        if num_tokens > 0:
+            self.status = (
+                RequestStatus.DECODING
+                if self.is_prefill_complete
+                else RequestStatus.PREFILLING
+            )
 
     def on_decode(self, token: int, now: float) -> None:
-        """Record one generated token. Returns nothing; callers check stopping."""
+        """Append one generated token and count its position as computed."""
         if self.status is not RequestStatus.DECODING:
             raise ValueError(f"{self.id}: cannot decode while {self.status.value}")
         self.generated_tokens.append(token)
+        self.num_computed_tokens += 1
         if self.first_token_time is None:
             self.first_token_time = now
 
     def on_preempted(self) -> None:
-        """KV blocks were reclaimed: rewind the prefill cursor so it can be recomputed.
+        """KV blocks were reclaimed: rewind the cursor so the sequence is recomputed.
 
-        The output tokens generated before eviction are kept: the recomputation
-        prefills the prompt again and re-caches them, so no output is lost.
+        The generated tokens are kept: recomputation walks the sequence again and
+        restores their KV, so no output is lost.
         """
         self.status = RequestStatus.PREEMPTED
-        self.prefilled_tokens = 0
+        self.num_computed_tokens = 0
         self.block_table.clear()
         self.num_preemptions += 1
 
     def on_finished(self, now: float) -> None:
         self.status = RequestStatus.FINISHED
         self.finish_time = now
-
 
     def mark_complete(self) -> None:
         """Flag the request as done during scheduling, for prefill-only requests."""

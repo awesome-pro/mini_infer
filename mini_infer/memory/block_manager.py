@@ -58,19 +58,24 @@ class MemoryStats:
 class BlockPlan:
     """A transactional view of the KV pool for one planning step.
 
-    Holds the real manager plus the blocks already promised to other requests in
-    the same step, so every "does this fit?" question has a single answer. Blocks
-    are only really taken when the engine allocates, which is what lets the
-    scheduler plan speculatively and rebuild the plan after an eviction.
+    Holds the real manager plus the blocks already promised to other requests and
+    the requests being evicted, all within one step, so every "does this fit?"
+    question has a single answer. Nothing here touches the manager: blocks are only
+    really taken or released when the engine commits the plan. That is what makes
+    the plan speculative and keeps planning separate from committing.
     """
 
-    __slots__ = ("manager", "_claims")
+    __slots__ = ("manager", "_claims", "_victims")
 
     def __init__(
-        self, manager: PagedBlockManager, claims: Mapping[str, int] | None = None
+        self,
+        manager: PagedBlockManager,
+        claims: Mapping[str, int] | None = None,
+        victims: Mapping[str, int] | None = None,
     ) -> None:
         self.manager = manager
         self._claims: dict[str, int] = dict(claims or {})
+        self._victims: dict[str, int] = dict(victims or {})
 
     @property
     def block_size(self) -> int:
@@ -91,10 +96,34 @@ class BlockPlan:
             blocks for req_id, blocks in self._claims.items() if req_id != request_id
         )
 
+    def evict(self, request_id: str, blocks_freed: int) -> None:
+        """Mark a request as evicted, releasing its blocks in this plan only."""
+        self._victims[request_id] = max(0, blocks_freed)
+
+    def is_evicted(self, request_id: str) -> bool:
+        return request_id in self._victims
+
+    @property
+    def num_victims(self) -> int:
+        return len(self._victims)
+
+    @property
+    def blocks_freed(self) -> int:
+        return sum(self._victims.values())
+
+    def victims(self) -> dict[str, int]:
+        return dict(self._victims)
+
+    def claims(self) -> dict[str, int]:
+        """Extra blocks promised to each request by this plan."""
+        return {req_id: blocks for req_id, blocks in self._claims.items() if blocks}
+
     def free_blocks(self, request_id: str | None = None) -> int:
-        """Real free blocks plus what this request claims, minus its rivals' claims."""
+        """Blocks usable right now: real free ones, plus the plan's evictions, plus
+        what this request already claims, minus what its rivals claim."""
         return (
             self.manager.num_free_blocks()
+            + self.blocks_freed
             + self.claim_of(request_id or "")
             - self.claimed_elsewhere(request_id)
         )
@@ -106,24 +135,22 @@ class BlockPlan:
     def max_growth_tokens(self, request: Request, cap: int) -> int:
         """Largest number of tokens this request may add, within ``cap``.
 
-        The block table must cover the whole sequence, so the furthest sequence
-        length it can reach is the blocks it holds plus the blocks it may still
-        take, times the block size. The request's current length is already covered
-        by the blocks it holds, so the growth available is the shortfall between
-        that reachable length and the current length.
+        The block table must cover everything computed so far, so the furthest
+        sequence length reachable is the blocks available to this request times the
+        block size. Growth is the shortfall between that and the current cursor.
         """
-        held = request.block_table.num_blocks + self.claim_of(request.id)
-        taken_elsewhere = self.claimed_elsewhere(request.id)
-        reachable = (
-            held + self.manager.num_free_blocks() - taken_elsewhere
-        ) * self.block_size
-        return max(0, min(cap, reachable - request.sequence_len))
-
-    def to_dict(self) -> dict[str, int]:
-        return dict(self._claims)
+        # free_blocks already includes this request's own claim, so only the blocks
+        # it physically holds need adding.
+        held = request.block_table.num_blocks
+        available = held + self.free_blocks(request.id)
+        reachable = available * self.block_size
+        return max(0, min(cap, reachable - request.num_computed_tokens))
 
     def __repr__(self) -> str:
-        return f"BlockPlan(claims={self._claims}, free={self.manager.num_free_blocks()})"
+        return (
+            f"BlockPlan(claims={self._claims}, victims={self._victims}, "
+            f"free={self.manager.num_free_blocks()})"
+        )
 
 
 class BlockManager(Protocol):
@@ -147,9 +174,11 @@ class BlockManager(Protocol):
         """Open a planning view for one scheduling step."""
         return BlockPlan(self, claims)
 
-    def block_plan(self, claims: Mapping[str, int] | None = None) -> BlockPlan:
-        """Open a planning view of the pool for one scheduling step."""
-        return BlockPlan(self, claims)
+    def block_plan(
+        self, claims: Mapping[str, int] | None = None, victims: Mapping[str, int] | None = None
+    ) -> BlockPlan:
+        """Open a speculative view of the pool for one scheduling step."""
+        return BlockPlan(self, claims, victims)
 
     def blocks_needed_for_plan(self, work: Sequence[ScheduledWork]) -> int: ...
 
@@ -168,7 +197,7 @@ class PagedBlockManager:
     Invariants, checked on demand by :meth:`assert_invariants`:
 
     * one physical block belongs to at most one request
-    * a request's block table holds exactly ``ceil(sequence_len / block_size)`` blocks
+    * a request's block table covers its full sequence length
     * freed blocks return to the pool, so no capacity leaks
     """
 
@@ -222,8 +251,14 @@ class PagedBlockManager:
         return blocks_for_tokens(num_tokens, self.block_size)
 
     def blocks_needed(self, request: Request, num_new_tokens: int) -> int:
-        """Total blocks needed if ``num_new_tokens`` more tokens are cached."""
-        return self.blocks_needed_to_reach(request, request.sequence_len + num_new_tokens)
+        """Total blocks needed once ``num_new_tokens`` more positions are computed.
+
+        Counted from the compute cursor, like every other memory question: only
+        positions that have been computed hold KV.
+        """
+        return self.blocks_needed_to_reach(
+            request, request.num_computed_tokens + num_new_tokens
+        )
 
     def can_fit(self, request: Request, num_new_tokens: int) -> bool:
         extra = self.blocks_needed(request, num_new_tokens) - request.block_table.num_blocks
@@ -233,9 +268,11 @@ class PagedBlockManager:
         """Open a planning view for one scheduling step."""
         return BlockPlan(self, claims)
 
-    def block_plan(self, claims: Mapping[str, int] | None = None) -> BlockPlan:
-        """Open a planning view of the pool for one scheduling step."""
-        return BlockPlan(self, claims)
+    def block_plan(
+        self, claims: Mapping[str, int] | None = None, victims: Mapping[str, int] | None = None
+    ) -> BlockPlan:
+        """Open a speculative view of the pool for one scheduling step."""
+        return BlockPlan(self, claims, victims)
 
     def blocks_needed_for_plan(self, work: Sequence[ScheduledWork]) -> int:
         """Blocks required by all scheduled work, counted per request.
@@ -253,7 +290,7 @@ class PagedBlockManager:
 
         total = 0
         for request_id, request in requests.items():
-            target = request.sequence_len + planned_tokens[request_id]
+            target = request.num_computed_tokens + planned_tokens[request_id]
             needed = self.blocks_needed_to_reach(request, target)
             total += max(0, needed - request.block_table.num_blocks)
         return total
@@ -267,7 +304,7 @@ class PagedBlockManager:
     ) -> int:
         """Largest prefill chunk the pool can hold right now."""
         plan = BlockPlan(self, blocks_planned)
-        cap = request.remaining_prefill
+        cap = request.num_uncomputed_tokens
         if chunk_cap is not None:
             cap = min(cap, chunk_cap)
         return plan.max_growth_tokens(request, cap)
@@ -281,10 +318,10 @@ class PagedBlockManager:
         have established that the blocks are available; over-allocating is never
         allowed, so a request's block table always covers its whole sequence.
         """
-        if num_tokens < request.sequence_len:
+        if num_tokens < request.num_computed_tokens:
             raise ValueError(
                 f"{request.id}: cannot grow to {num_tokens} tokens, already at "
-                f"{request.sequence_len}"
+                f"{request.num_computed_tokens}"
             )
         needed = self.blocks_needed_to_reach(request, num_tokens)
         extra = needed - request.block_table.num_blocks
@@ -327,7 +364,7 @@ class PagedBlockManager:
             free_blocks=self.num_free_blocks(),
             allocated_blocks=self.num_allocated_blocks,
             sequences=len(self._owned),
-            used_tokens=sum(r.sequence_len for r in self._owned.values()),
+            used_tokens=sum(r.num_computed_tokens for r in self._owned.values()),
             block_size=self.block_size,
         )
 
@@ -339,11 +376,11 @@ class PagedBlockManager:
             raise AssertionError("a block is both free and owned")
 
         for request in self._owned.values():
-            expected = blocks_for_tokens(request.sequence_len, self.block_size)
+            expected = blocks_for_tokens(request.num_computed_tokens, self.block_size)
             if request.block_table.num_blocks != expected:
                 raise AssertionError(
                     f"{request.id}: holds {request.block_table.num_blocks} blocks but "
-                    f"{request.sequence_len} tokens need {expected}"
+                    f"{request.num_computed_tokens} computed tokens need {expected}"
                 )
             for block_id in request.block_table.physical_blocks:
                 if self._owner.get(block_id) != request.id:

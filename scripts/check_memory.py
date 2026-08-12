@@ -173,7 +173,7 @@ def check_engine_allocates_blocks_that_match_each_sequence() -> None:
         if not request.is_finished:
             # A request that finishes in this step is released in the same step,
             # so its table is empty by the time the step is observed.
-            expected = blocks_for_tokens(request.sequence_len, 8)
+            expected = blocks_for_tokens(request.num_tokens, 8)
             assert request.block_table.num_blocks == expected
 
     memory = engine.memory
@@ -218,6 +218,18 @@ def check_admission_control_waits_instead_of_overcommitting() -> None:
     assert memory.blocks_needed(request, 40) > memory.num_free_blocks()
     assert not memory.can_fit(request, 40), "a request needing 5 of 4 blocks cannot fit"
 
+    # A request that outgrows the pool mid-flight cannot be given another token.
+    long_request = make_request(16, 16)
+    memory.grow_to(long_request, 16)
+    long_request.on_prefill(16)
+    assert memory.num_free_blocks() == 2
+    for _ in range(16):
+        long_request.on_decode(token=0, now=0.0)
+        memory.grow_to(long_request, long_request.num_computed_tokens)
+    assert memory.num_free_blocks() == 0, "the pool is now full"
+    assert memory.blocks_needed(long_request, 1) == 5
+    assert not memory.can_fit(long_request, 1)
+
 
 def check_unfittable_request_stalls_cleanly_instead_of_corrupting_kv() -> None:
     """A prompt too large for the pool stalls, and reports that clearly."""
@@ -230,7 +242,7 @@ def check_unfittable_request_stalls_cleanly_instead_of_corrupting_kv() -> None:
 
     memory.assert_invariants()
     assert request.status is not RequestStatus.FINISHED, "it cannot have completed"
-    assert request.prefilled_tokens == 8, "it cached what the pool could hold, then stopped"
+    assert request.num_computed_tokens == 8, "it cached what the pool could hold, then stopped"
     assert steps[-1].is_stalled, "the engine reports the stall rather than finishing"
     assert memory.num_free_blocks() == 0
 
@@ -308,7 +320,7 @@ def check_randomized_workload_holds_all_invariants() -> None:
         assert memory.num_allocated_blocks <= config.num_blocks
         for work in step.output.work:
             request = work.request
-            assert request.prefilled_tokens <= request.prompt_len
+            assert request.num_computed_tokens <= request.num_tokens
             assert request.num_generated <= request.max_new_tokens
 
     memory = engine.memory
