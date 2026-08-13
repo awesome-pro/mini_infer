@@ -18,6 +18,7 @@ from mini_infer.config import EngineConfig
 from mini_infer.engine.request import Request, RequestStatus
 from mini_infer.engine.scheduler import ScheduledKind, SchedulerOutput
 from mini_infer.memory.block_manager import PagedBlockManager
+from mini_infer.metrics.collector import MetricsCollector
 from mini_infer.runner.base import ModelRunner
 from mini_infer.runner.simulated_runner import SimulatedModelRunner
 
@@ -50,6 +51,8 @@ class EngineStep:
     free_blocks: int | None = None
     total_blocks: int | None = None
     preemptions: dict[str, str] = field(default_factory=dict)
+    running_requests: int = 0
+    waiting_requests: int = 0
     progress: tuple = ()
     previous_progress: tuple = ()
 
@@ -116,6 +119,7 @@ class Engine:
         scheduler: Scheduler | None = None,
         runner: ModelRunner | None = None,
         memory: PagedBlockManager | None = None,
+        metrics: MetricsCollector | None = None,
         max_stalled_steps: int = 2,
     ) -> None:
         self.config = config or EngineConfig()
@@ -128,6 +132,8 @@ class Engine:
             if memory is not None
             else PagedBlockManager(self.config.num_blocks, self.config.block_size)
         )
+        self.metrics: MetricsCollector = metrics if metrics is not None else MetricsCollector()
+        self.metrics.attach(self)
         self.max_stalled_steps = max_stalled_steps
         self.scheduler: Scheduler = (
             scheduler
@@ -159,6 +165,7 @@ class Engine:
             raise ValueError(f"duplicate request id {request.id!r}")
         self.requests[request.id] = request
         self.waiting.append(request)
+        self.metrics.register(request)
         return request
 
     def submit_at(self, request: Request) -> Request:
@@ -170,6 +177,7 @@ class Engine:
             )
         if request.id in self.requests:
             raise ValueError(f"duplicate request id {request.id!r}")
+        self.metrics.register(request)
         heapq.heappush(self._arrival_heap, (request.arrival_time, self._arrival_seq, request))
         self._arrival_seq += 1
         return request
@@ -179,6 +187,7 @@ class Engine:
             _, _, request = heapq.heappop(self._arrival_heap)
             self.requests[request.id] = request
             self.waiting.append(request)
+            self.metrics.register(request)
 
     # ------------------------------------------------------------------- step
 
@@ -251,11 +260,14 @@ class Engine:
             free_blocks=self.memory.num_free_blocks() if self.memory else None,
             total_blocks=self.memory.num_blocks if self.memory else None,
             preemptions=dict(output.preemptions),
+            running_requests=len(self.running),
+            waiting_requests=len(self.waiting),
             progress=self._progress_fingerprint(),
             previous_progress=progress_before,
         )
         self._step_index += 1
         self.history.append(step)
+        self.metrics.record_step(step)
         # Leave the running set consistent with request status, so callers
         # inspecting the engine between steps see the truth.
         self._sync_running_set()
