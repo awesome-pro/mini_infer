@@ -117,6 +117,15 @@ class Request:
         """True once the request has been finalised by the engine."""
         return self.status is RequestStatus.FINISHED
 
+    def tokens_needed_in_full(self) -> int:
+        """Sequence length the request will hold once fully generated.
+
+        Used to detect a request that can never fit the KV pool, which is a
+        configuration limit rather than a scheduling problem: no policy can admit it
+        because one request alone would need more memory than the pool has.
+        """
+        return self.num_tokens + (self.max_new_tokens - self.num_generated)
+
     def context_at_step(self, new_tokens: int) -> int:
         """Sequence length the cache must hold after ``new_tokens`` more tokens."""
         return self.num_computed_tokens + new_tokens

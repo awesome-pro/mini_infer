@@ -198,6 +198,14 @@ class Engine:
             return 0.0
         return self.memory.peak_utilization
 
+    @property
+    def num_waiting(self) -> int:
+        return len(self.waiting)
+
+    @property
+    def num_running(self) -> int:
+        return len(self.running)
+
     def has_pending_work(self) -> bool:
         return bool(self.waiting or self.running or self._arrival_heap)
 

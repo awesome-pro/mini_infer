@@ -295,6 +295,15 @@ class PagedBlockManager:
             total += max(0, needed - request.block_table.num_blocks)
         return total
 
+    def can_ever_fit(self, request: Request) -> bool:
+        """Whether the request's full sequence could fit an empty pool.
+
+        False for a request whose prompt plus maximum output exceeds the whole pool:
+        admitting it can only deadlock the engine, so a benchmark should say so
+        rather than report a stall.
+        """
+        return blocks_for_tokens(request.tokens_needed_in_full(), self.block_size) <= self.num_blocks
+
     def max_prefill_chunk(
         self,
         request: Request,
