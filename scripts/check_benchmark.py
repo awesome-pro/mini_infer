@@ -273,6 +273,21 @@ def check_small_pool_stalls_and_is_reported() -> None:
     assert result.stalled, "the failure mode must be reported as a stall"
 
 
+def check_completed_run_is_never_reported_as_stalled() -> None:
+    """A finished workload must not be flagged stalled by its final no-op step.
+
+    After the last request completes, one more step schedules nothing. That is
+    completion, not a deadlock, and a benchmark that confused the two would report
+    good configurations as broken.
+    """
+    for budget in (16, 32, 64, 128):
+        result = run_case(
+            small_spec("poisson", num_requests=60, rate=20.0), base_config(max_batch_tokens=budget)
+        )
+        assert result.finished_all, f"budget {budget} did not finish"
+        assert not result.stalled, f"budget {budget} finished but was flagged stalled"
+
+
 def check_driver_does_not_abandon_running_work() -> None:
     """A stalled step with requests still running must not end the run."""
     spec = small_spec("poisson", num_requests=16, rate=40.0)
@@ -378,6 +393,7 @@ def main() -> int:
     check("poisson saturates with rate", check_poisson_saturates_with_arrival_rate)
     check("all arrival modes complete", check_all_arrival_modes_complete_a_feasible_workload)
     check("infeasible pool is reported as a stall", check_small_pool_stalls_and_is_reported)
+    check("completed runs are never stalled", check_completed_run_is_never_reported_as_stalled)
     check("driver does not abandon running work", check_driver_does_not_abandon_running_work)
     check("report renders a table", check_report_renders_a_table)
     check("report formats numbers", check_report_formats_numbers_readably)

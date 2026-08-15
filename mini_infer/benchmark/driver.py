@@ -158,9 +158,17 @@ class Driver:
             else:
                 consecutive_stalls = 0
 
-        return self._result(
-            stalled=bool(self.steps) and self.steps[-1].is_stalled, started=started
-        )
+        return self._result(stalled=self._stalled(), started=started)
+
+    def _stalled(self) -> bool:
+        """Whether the run ended stuck rather than finished.
+
+        A run that completed every request is never stalled, even though the final
+        step schedules nothing: the work is done, not blocked.
+        """
+        if not self.steps or self.steps[-1].is_stalled is False:
+            return False
+        return len(self.engine.finished) < self.workload.num_requests
 
     def _result(self, *, stalled: bool, started: float) -> RunResult:
         elapsed = self.engine.clock.now()

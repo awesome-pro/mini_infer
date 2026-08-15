@@ -184,9 +184,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     stalled = [row for row in rows if row.get("stalled")]
     if stalled:
+        names = ", ".join(str(row.get("label")) for row in stalled)
         print(
-            f"\n{len(stalled)} run(s) stalled: the KV pool cannot hold this workload. "
-            "Increase --num-blocks or shorten the prompts."
+            f"\n{len(stalled)} run(s) stalled ({names}): the KV pool cannot hold this\n"
+            "workload, so requests hold partial sequences and cannot advance. Raise\n"
+            "--num-blocks, shorten the prompts, or lower --max-running-requests."
         )
 
     if args.json:
