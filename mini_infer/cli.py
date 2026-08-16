@@ -7,6 +7,7 @@ Examples::
 
     python -m mini_infer.cli --requests 200 --arrival poisson --rate 12
     python -m mini_infer.cli --sweep rate --values 2,4,8,16,32,64
+    python -m mini_infer.cli --sweep policy --values fcfs,prefill_first,balanced,static
     python -m mini_infer.cli --sweep num_blocks --values 16,32,64,128 --export results
 """
 
@@ -32,21 +33,28 @@ from mini_infer.benchmark.workloads import (
     prompt_profile,
 )
 from mini_infer.config import EngineConfig
+from mini_infer.engine.policies import policy_names
 
 #: Configuration axes that can be swept, and how to apply a value.
 SWEEPS: dict[str, str] = {
+    "policy": "scheduling policy",
     "rate": "requests per second for poisson arrivals",
     "num_blocks": "KV pool size in blocks",
     "block_size": "tokens per KV block",
     "max_batch_tokens": "per-step token budget",
     "max_running_requests": "concurrent request limit",
     "max_prefill_chunk": "largest prefill chunk",
+    "max_wait_steps": "balanced: ageing bound in steps",
+    "prefill_reservation": "balanced: tokens per step reserved for prefill",
     "arrival": "burst, poisson or closed_loop",
 }
 
+#: Sweep axes whose values are names rather than numbers.
+STRING_AXES = ("policy", "arrival")
+
 
 def parse_values(raw: str, axis: str) -> list:
-    if axis == "arrival":
+    if axis in STRING_AXES:
         return [part.strip() for part in raw.split(",") if part.strip()]
     values: list = []
     for part in raw.split(","):
@@ -85,6 +93,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="output length profile",
     )
 
+    parser.add_argument(
+        "--policy",
+        default="fcfs",
+        choices=policy_names(),
+        help="scheduling policy",
+    )
+    parser.add_argument(
+        "--max-wait-steps",
+        type=int,
+        default=16,
+        help="balanced: steps before the oldest waiter is served first (0 disables)",
+    )
+    parser.add_argument(
+        "--prefill-reservation",
+        type=int,
+        default=16,
+        help="balanced: tokens per step decodes may not spend",
+    )
+
     parser.add_argument("--max-batch-tokens", type=int, default=64)
     parser.add_argument("--max-running-requests", type=int, default=4)
     parser.add_argument("--num-blocks", type=int, default=128)
@@ -103,6 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def config_from_args(args: argparse.Namespace) -> EngineConfig:
     return EngineConfig(
+        policy=args.policy,
         max_batch_tokens=args.max_batch_tokens,
         max_running_requests=args.max_running_requests,
         num_blocks=args.num_blocks,
@@ -110,6 +138,8 @@ def config_from_args(args: argparse.Namespace) -> EngineConfig:
         max_prefill_chunk=args.max_prefill_chunk,
         enable_chunked_prefill=not args.no_chunked_prefill,
         enable_preemption=not args.no_preemption,
+        max_wait_steps=args.max_wait_steps,
+        prefill_reservation=args.prefill_reservation,
     )
 
 
@@ -131,6 +161,8 @@ def apply_sweep(
     config: EngineConfig, workload: WorkloadSpec, axis: str, value
 ) -> tuple[EngineConfig, WorkloadSpec]:
     """The (config, workload) pair for one point of a sweep."""
+    if axis == "policy":
+        return config.with_(policy=str(value)), workload
     if axis == "rate":
         return config, replace(workload, rate=float(value))
     if axis == "arrival":
@@ -176,12 +208,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(Report().render(rows, title=header))
     print(
-        f"\nengine: max_batch_tokens={base_config.max_batch_tokens} "
+        f"\nengine: policy={base_config.policy} "
+        f"max_batch_tokens={base_config.max_batch_tokens} "
         f"max_running_requests={base_config.max_running_requests} "
         f"num_blocks={base_config.num_blocks} block_size={base_config.block_size} "
         f"chunked_prefill={base_config.enable_chunked_prefill} "
         f"preemption={base_config.enable_preemption}"
     )
+    if base_config.policy == "balanced":
+        print(
+            f"balanced: prefill_reservation={base_config.prefill_reservation} "
+            f"max_wait_steps={base_config.max_wait_steps}"
+        )
     stalled = [row for row in rows if row.get("stalled")]
     if stalled:
         names = ", ".join(str(row.get("label")) for row in stalled)

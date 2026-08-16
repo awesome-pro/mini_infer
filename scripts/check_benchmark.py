@@ -316,6 +316,24 @@ def check_report_formats_numbers_readably() -> None:
     assert "nan" not in table.lower() or table.count("-") > 0
 
 
+def check_report_columns_exist_in_a_real_row() -> None:
+    """A column whose name does not match ``as_row`` would be dropped silently."""
+    rows = sweep_axis(
+        small_spec("poisson", rate=10.0),
+        base_config(),
+        values=[128],
+        apply=lambda config, value: config.with_(num_blocks=value),
+        label=lambda value: f"{value} blocks",
+    )
+    row = rows[0].as_row()
+    # `completed` is presentation-only: the CLI formats it from finished/requests.
+    missing = [c for c in Report().columns if c not in row and c != "completed"]
+    assert not missing, f"report columns missing from a real sweep row: {missing}"
+    table = Report().render([row])
+    assert "out tok/s" in table, "throughput must reach the table"
+    assert "KV peak" in table, "KV utilization must reach the table"
+
+
 def check_sweep_produces_one_row_per_config() -> None:
     spec = small_spec("poisson", rate=15.0)
     rows = sweep_axis(
@@ -397,6 +415,7 @@ def main() -> int:
     check("driver does not abandon running work", check_driver_does_not_abandon_running_work)
     check("report renders a table", check_report_renders_a_table)
     check("report formats numbers", check_report_formats_numbers_readably)
+    check("report columns exist in a result row", check_report_columns_exist_in_a_real_row)
     check("sweep gives one row per config", check_sweep_produces_one_row_per_config)
     check("sweep rows are self-contained", check_sweep_rows_are_self_contained)
     check("json export round-trips", check_json_export_round_trips)

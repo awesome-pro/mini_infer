@@ -73,6 +73,10 @@ class EngineConfig:
             raise ValueError("max_prefill_chunk must be >= 1 when set")
         if self.dtype_bytes < 1:
             raise ValueError("dtype_bytes must be >= 1")
+        if self.max_wait_steps < 0:
+            raise ValueError("max_wait_steps must be >= 0 (0 disables ageing)")
+        if self.prefill_reservation < 0:
+            raise ValueError("prefill_reservation must be >= 0")
 
     @property
     def kv_bytes_per_token(self) -> int:

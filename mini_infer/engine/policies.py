@@ -13,6 +13,25 @@ Two ideas shape every policy here:
 Chunked prefill is a knob rather than a policy: with it off, a prompt that fits a
 step is prefilled in one shot, and one that does not is still split, because the
 budget is a hard limit and refusing to split would deadlock.
+
+Every policy answers the same question differently: *who gets this step's token
+budget?* That is deliberate, because it isolates one decision at a time.
+
+``fcfs`` / ``decode_first``
+    Decodes are served first, prefills take what is left. The two are identical by
+    construction — serving the decoding set before the prefill set *is* decode
+    priority — and ``decode_first`` exists as a name so a comparison can point at
+    the pole it is measuring.
+``prefill_first``
+    The opposite order: prefills first, so time-to-first-token is low and the
+    decoding requests pay for it.
+``balanced``
+    Decode-first with a prefill floor (``prefill_reservation``) and ageing
+    (``max_wait_steps``), so that neither side can be starved.
+``static``
+    Not a budget decision but an admission one: a batch forms and no new request
+    joins it until the batch has drained. The baseline that continuous batching
+    replaces.
 """
 
 from __future__ import annotations
@@ -47,6 +66,8 @@ class SchedulerBase:
         #: Transactional view of the KV pool for the step being planned.
         self.plan: BlockPlan | None = BlockPlan(memory) if memory is not None else None
         self._requirements: dict[str, int] = {}
+        #: Consecutive steps each request has spent waiting for its first chunk.
+        self._wait_steps: dict[str, int] = {}
 
     # ------------------------------------------------------------- interfaces
 
@@ -60,6 +81,7 @@ class SchedulerBase:
         memory: PagedBlockManager | None = None,
     ) -> SchedulerOutput:
         self.memory = memory if memory is not None else self.memory
+        self._track_waiting(waiting)
         self._reset_step_state()
 
         work: list[ScheduledWork] = []
@@ -83,6 +105,24 @@ class SchedulerBase:
     def _reset_step_state(self) -> None:
         self.plan = BlockPlan(self.memory) if self.memory is not None else None
         self._requirements = {}
+
+    def _track_waiting(self, waiting: Sequence[Request]) -> None:
+        """Count how many consecutive steps each request has spent waiting.
+
+        One call per engine step, so the count is in steps rather than milliseconds
+        and stays meaningful under a virtual clock. A request that leaves the queue
+        is forgotten, so a later re-admission starts from zero.
+        """
+        present = set()
+        for request in waiting:
+            present.add(request.id)
+            self._wait_steps[request.id] = self._wait_steps.get(request.id, 0) + 1
+        for request_id in [i for i in self._wait_steps if i not in present]:
+            del self._wait_steps[request_id]
+
+    def waited_steps(self, request: Request) -> int:
+        """Consecutive steps this request has waited for its first chunk."""
+        return self._wait_steps.get(request.id, 0)
 
     def _build_plan(
         self,
@@ -334,19 +374,175 @@ class SchedulerBase:
         return (request.arrival_time, request.id)
 
 
-class FCFSPolicy(SchedulerBase):
-    """First come, first served, with decode before prefill inside a step."""
+class DecodeFirstPolicy(SchedulerBase):
+    """Decodes are served first; prefills get whatever budget is left.
+
+    Protects inter-token latency at the cost of time-to-first-token: under a
+    decode-heavy load a prefill can be granted zero tokens for the step, and a
+    request can wait many steps for its first token. That is the failure
+    :class:`BalancedPolicy` bounds, so this policy is worth keeping unpatched.
+
+    It delays rather than deadlocks: admission is ordered by arrival and outputs are
+    finite, so the decoding set always drains and frees budget eventually.
+    """
+
+    name = "decode_first"
+
+
+class FCFSPolicy(DecodeFirstPolicy):
+    """First come, first served within each phase, decode phase first.
+
+    Both phases order by arrival, so this is the oldest-request-first schedule.
+    """
 
     name = "fcfs"
+
+
+class PrefillFirstPolicy(SchedulerBase):
+    """Prefills are served first; decodes get whatever budget is left.
+
+    Good time-to-first-token and poor inter-token latency: one long prompt can take
+    the whole step and push every decode out by a step.
+    """
+
+    name = "prefill_first"
+    phase_order = ("prefill", "decode")
+
+
+class BalancedPolicy(SchedulerBase):
+    """Decode-first with a prefill floor, plus ageing for the oldest waiter.
+
+    Two mechanisms, each with one job:
+
+    * ``prefill_reservation`` is a floor, in tokens per step, that the decodes may
+      not spend. Prefills keep progressing under a decode-heavy load, which is what
+      stops them being granted zero tokens step after step.
+    * ``max_wait_steps`` decides *which* waiter the floor is spent on: a request that
+      has waited this many steps sorts ahead of younger ones in the prefill order,
+      and when the reservation is zero it creates a one-token floor anyway (``0``
+      disables ageing).
+
+    The wait this bounds is only as tight as the queue allows: a burst of requests
+    can all cross the ageing threshold on the same step, and they are then served
+    oldest-first, so the worst wait also depends on how many got there first.
+
+    The floor is a floor, not a cap: once the decodes have their share, prefills
+    may spend the rest of the step. Both mechanisms act through one schedule, so
+    there is no path that starves the decodes to rescue a prefill.
+    """
+
+    name = "balanced"
+
+    def _build_plan(
+        self,
+        work: list[ScheduledWork],
+        waiting: Sequence[Request],
+        running: Sequence[Request],
+        budget: int,
+    ) -> None:
+        reserve = self._reserve(waiting, running, budget)
+        used = self._schedule_decode(work, running, budget - reserve)
+        self._schedule_prefill(work, waiting, running, budget - used)
+
+    def _reserve(
+        self, waiting: Sequence[Request], running: Sequence[Request], budget: int
+    ) -> int:
+        """Tokens of this step's budget that only prefills may spend."""
+        if not self._prefill_pending(waiting, running):
+            return 0
+        reserve = min(self.config.prefill_reservation, budget)
+        if reserve <= 0 and any(self._is_aged(request) for request in waiting):
+            reserve = 1
+        if any(request.status is RequestStatus.DECODING for request in running):
+            # Never take the last token from the decodes: a reservation equal to the
+            # budget would leave them with nothing to do, every step, forever.
+            reserve = min(reserve, budget - 1)
+        return max(0, reserve)
+
+    def _prefill_pending(self, waiting: Sequence[Request], running: Sequence[Request]) -> bool:
+        """Whether a prefill could spend the reservation this step.
+
+        Reserving budget no prefill can use would tax the decodes for nothing, so a
+        request that is memory-blocked, or that has no free admission slot, is not a
+        reason to reserve.
+        """
+        active = sum(1 for request in running if request.status.is_active)
+        open_slots = max(0, self.config.max_running_requests - active)
+        for request in (*running, *waiting):
+            if request.num_uncomputed_tokens <= 0:
+                continue
+            if not request.status.is_active and open_slots <= 0:
+                continue
+            if self.plan is None or self.plan.max_growth_tokens(request, 1) > 0:
+                return True
+        return False
+
+    def _is_aged(self, request: Request) -> bool:
+        """Whether this request has waited past the ageing bound."""
+        limit = self.config.max_wait_steps
+        return (
+            limit > 0
+            and request.num_uncomputed_tokens > 0
+            and self.waited_steps(request) >= limit
+        )
+
+    def prefill_order_key(self, request: Request) -> tuple:
+        # An aged request is served before younger prefills, so the floor goes to
+        # the request that has waited longest rather than to a fresh arrival.
+        return (0 if self._is_aged(request) else 1, request.arrival_time, request.id)
+
+
+class StaticBatchPolicy(SchedulerBase):
+    """Static batching: a batch forms, then no new request joins until it drains.
+
+    The same engine, budget and memory manager as the continuous policies; only
+    admission differs, so comparing it isolates the cost of refusing to refill a
+    slot as soon as one frees. Inside a batch prefill and decode still interleave,
+    and prefills are still chunked.
+    """
+
+    name = "static"
+
+    def _schedule_prefill(
+        self,
+        work: list[ScheduledWork],
+        waiting: Sequence[Request],
+        running: Sequence[Request],
+        budget: int,
+    ) -> int:
+        if running:
+            # A batch is in flight: arrivals wait for the next batch. Mid-prompt
+            # members of the batch still reach the prefill phase through `running`.
+            waiting = ()
+        return super()._schedule_prefill(work, waiting, running, budget)
+
+
+#: Every registered policy, keyed by the name a configuration refers to.
+POLICIES: dict[str, type[SchedulerBase]] = {
+    policy.name: policy
+    for policy in (
+        FCFSPolicy,
+        DecodeFirstPolicy,
+        PrefillFirstPolicy,
+        BalancedPolicy,
+        StaticBatchPolicy,
+    )
+}
+
+
+def policy_names() -> tuple[str, ...]:
+    """Registered policy names, in a stable order."""
+    return tuple(sorted(POLICIES))
 
 
 def build_policy(
     name: str, config: EngineConfig, *, memory: PagedBlockManager | None = None
 ) -> SchedulerBase:
     """Instantiate a scheduling policy by name."""
-    policies = {FCFSPolicy.name: FCFSPolicy}
     try:
-        policy_cls = policies[name]
+        policy_cls = POLICIES[name]
     except KeyError:
-        raise ValueError(f"unknown policy {name!r}; available: {sorted(policies)}") from None
+        raise ValueError(
+            f"unknown policy {name!r}; available: {', '.join(policy_names())}"
+        ) from None
     return policy_cls(config, memory=memory)

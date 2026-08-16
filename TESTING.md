@@ -3,16 +3,16 @@
 How to run, observe, poke at, and explain what's been built. Everything here is
 tested; every number shown is from an actual run on this machine.
 
-**Status:** 5 of 8 phases done, 89 checks passing, 6 commits.
+**Status:** 6 of 8 phases done, 108 checks passing, 7 commits.
 
 ```
-mini_infer/engine/      request model, scheduling contract, the execution loop
+mini_infer/engine/      request model, scheduling contract, policies, engine loop
 mini_infer/memory/      KV block pool (BlockPlan = transactional view)
 mini_infer/runner/      simulated execution-cost model
 mini_infer/metrics/     TTFT / ITL / TPOT / throughput / KV utilization
 mini_infer/benchmark/   workloads, driver, sweeps, exports
 mini_infer/visualizations/  text timelines and charts
-scripts/check_*.py      89 checks (no test framework — plain asserts)
+scripts/check_*.py      108 checks (no test framework — plain asserts)
 examples/*.py           runnable demos, each showing one idea
 ```
 
@@ -23,7 +23,7 @@ examples/*.py           runnable demos, each showing one idea
 ```bash
 cd /Users/abhinandan/Desktop/mini_infer
 
-for f in check_engine check_memory check_preemption check_metrics check_benchmark; do
+for f in check_engine check_memory check_preemption check_metrics check_benchmark check_policies; do
   python scripts/$f.py
 done
 ```
@@ -35,16 +35,18 @@ phase 1 skeleton: all 24 checks passed
 phase 2 block-based KV manager: all 16 checks passed
 phase 3 recompute preemption: all 8 checks passed
 phase 4 metrics: all 18 checks passed
-phase 5 benchmark harness: all 23 checks passed
+phase 5 benchmark harness: all 25 checks passed
+phase 6 scheduling policies: all 17 checks passed
 ```
 
-Then the four demos:
+Then the five demos:
 
 ```bash
-python examples/demo.py            # the brief's scenario, step by step
-python examples/kv_pressure.py     # preemption off vs on
-python examples/metrics_demo.py    # what the metrics look like
-python examples/benchmark_demo.py  # saturation + sweeps
+python examples/demo.py              # the brief's scenario, step by step
+python examples/kv_pressure.py       # preemption off vs on
+python examples/metrics_demo.py      # what the metrics look like
+python examples/benchmark_demo.py    # saturation + sweeps
+python examples/policy_comparison.py # the scheduling policies, head to head
 ```
 
 If all of that runs, the system is healthy. The rest of this guide is about
@@ -437,14 +439,16 @@ python -m mini_infer.cli --requests 150 --rate 12 --sweep max_batch_tokens \
 ```
 
 ```
-case  done     TTFT mean  TTFT p95  TPOT mean  ITL p95
-  16  150/150    3,475.5   6,780.8      5.259     7.52
-  32  150/150    2,784.0   5,551.1      6.123    8.128     <- best latency
-  64  150/150    2,894.1   5,794.0       6.72    8.328
- 128  150/150    3,312.9   6,600.2      7.181      12     <- worst latency
+case  done     out tok/s  TTFT mean  TTFT p95  TPOT mean  ITL p95  KV peak
+  16  150/150      505.9    3,475.5   6,780.8      5.259     7.52     0.43
+  32  150/150      541.9    2,784.0   5,551.1      6.123    8.128    0.434    <- best
+  64  150/150      531.5    2,894.1   5,794.0       6.72    8.328    0.461
+ 128  150/150      507.1    3,312.9   6,600.2      7.181      12     0.453    <- worst
 ```
 
-TTFT is **non-monotonic** in the budget: 32 tokens/step beats both 16 and 128.
+TTFT is **non-monotonic** in the budget: 32 tokens/step beats both 16 and 128, and
+it is also the throughput peak. Note that 64 — the configured default — is not the
+best value here, and the table is what tells you so.
 
 Why: a bigger budget lets one long prompt monopolise a whole step, so decodes and
 short prompts wait — exactly the effect chunked prefill exists to mitigate. A smaller
@@ -468,7 +472,145 @@ behaviour*, while burst measures *capacity*.
 
 ---
 
-## 9. How to poke at invariants yourself
+## 9. Experiment 7 — the scheduling policies
+
+**What you're testing:** that the policies differ in exactly one decision — *who
+gets this step's token budget* — except `static`, which changes who may join at all.
+
+```bash
+python examples/policy_comparison.py     # all four sections below
+python -m mini_infer.cli --requests 120 --arrival burst --num-blocks 256 \
+  --sweep policy --values decode_first,fcfs,prefill_first,balanced,static
+```
+
+| name | rule | what it changes |
+|---|---|---|
+| `fcfs` | arrival order within each phase, decode phase first | the default |
+| `decode_first` | the same schedule, by construction | names the decode-priority pole |
+| `prefill_first` | prefill phase first, decodes take what is left | prefills win the step |
+| `balanced` | decode-first, plus a prefill floor and ageing | bounds the worst wait |
+| `static` | a batch drains before anyone new is admitted | the baseline continuous batching replaces |
+
+`fcfs` and `decode_first` producing identical numbers is a **tested fact**, not a
+coincidence: `check_policies.py` compares the full schedule (work, evictions and
+allocations, step by step) and asserts they match. Serving the decoding set before
+the prefill set *is* decode priority, so the default policy was already
+decode-first. That is worth saying out loud rather than shipping a duplicate class
+and calling it a second policy.
+
+### One workload, every policy
+
+Burst arrivals, 120 requests, mixed prompt/output lengths, budget 64, 4 running slots:
+
+```
+         case         policy  arrival     done  out tok/s  TTFT mean  TTFT p95  TPOT mean  ITL p95   E2E p95  queue mean  KV peak  decode batch  evictions
+ decode_first   decode_first    burst  120/120      879.5    3,864.0   7,687.2      4.119     6.88   7,958.5     3,847.8    0.324             4          0
+         fcfs           fcfs    burst  120/120      879.5    3,864.0   7,687.2      4.119     6.88   7,958.5     3,847.8    0.324             4          0
+prefill_first  prefill_first    burst  120/120      842.0    4,033.6   8,051.5      4.313    6.504   8,326.6     4,017.3    0.328             4          0
+     balanced       balanced    burst  120/120      879.7    3,862.6   7,683.7       4.12     6.88   7,954.6     3,846.1    0.324             4          0
+       static         static    burst  120/120      495.5    7,233.7  13,794.9      2.391    3.136  14,053.3     7,216.3    0.144             4          0
+```
+
+Read the two extremes:
+
+* **`static` loses 44% of its throughput** (879.5 → 495.5 tok/s) and **87% more
+  mean TTFT**, because a slot that frees stays empty until its whole batch drains.
+  That is the entire argument for continuous batching, in one row.
+* **`prefill_first` is slightly worse on everything except ITL** here (842 vs
+  879.5 tok/s, TTFT +4%, ITL p95 −6%). Under a saturated queue this is not the
+  clean trade-off the next section shows: it loses throughput, and TTFT in a
+  saturated system is dominated by queue depth, so the throughput loss costs more
+  TTFT than prefill priority wins back. **A policy effect that is obvious in
+  isolation can be washed out — even reversed — by queueing.** That is the most
+  useful thing in this table.
+* **`balanced` matches `fcfs`** (879.7 vs 879.5) because with only 4 decoding
+  requests the prefill floor of 16 tokens is never binding, and oldest-first
+  ordering already serves the queue fairly. Ageing has nothing to add. Its
+  knobs are visible in section 4 instead.
+
+### The trade-off in isolation: one long prompt behind a full decode batch
+
+8 requests are already decoding and fill the step when a 64-token prompt arrives.
+`late TTFT` is that request's time to first token; `decoders stalled` is how long
+the 8 existing requests waited for *their* next token after it arrived:
+
+```
+policy          late TTFT  decoders stalled  late step
+decode_first        49.4ms              2.6ms      3.45ms
+prefill_first       20.4ms             17.4ms      2.96ms
+balanced            49.3ms              2.6ms      3.45ms
+static            2096.4ms              2.0ms      2.00ms
+```
+
+**2.4× better TTFT, 6.7× worse inter-token latency.** That is the trade-off the
+project brief predicts, measured on one request instead of averaged over a queue —
+which is the only way it shows up cleanly. `balanced` sits at the decode-first end
+because its reservation (4 tokens of 12) is exactly the leftover decode-first
+already leaves; a reservation only changes behaviour when it is larger than the
+leftover, and section 4 shows the case where it is.
+
+### Static batching needs mixed lengths to show its cost
+
+16 requests arrive at once, 4 run at a time, output lengths 4–64 tokens:
+
+```
+  case  policy  arrival   done  out tok/s  TTFT mean  E2E p95  decode batch  evictions
+  fcfs    fcfs    burst  16/16    1,510.8      134.0    393.4             4          0
+static  static    burst  16/16    1,304.7      192.7    472.9             4          0
+```
+
+14% less throughput and 44% more mean TTFT — a smaller penalty than the burst table
+above, because only 4 requests run at a time here.
+
+The subtlety worth knowing: **if every request in a batch has the same length, static
+and continuous batching produce identical numbers**, because the whole batch finishes
+on the same step and there is never an idle slot to refill. `check_policies.py`
+asserts that identity too (`identical lengths hide static batching`), so the claim
+"static batching is worse" is never overstated: it is worse *when the batch is
+heterogeneous*, which real traffic is.
+
+### What the fairness knobs actually bound
+
+Budget 8 tokens per step, 40 requests arriving at once, 64 running slots. `worst wait`
+counts engine steps between a request becoming visible and its first compute:
+
+```
+policy                  finished  worst wait  never served
+decode_first                40/40       212 steps             0
+balanced r=2 w=off          40/40       141 steps             0
+balanced r=0 w=8            40/40        40 steps             0
+balanced r=2 w=8            40/40        40 steps             0
+```
+
+So both knobs help, and ageing is the one that actually caps the wait:
+
+* **`prefill_reservation=2` alone** cuts the worst wait 212 → 141. It is a floor on
+  how much of the step the decodes may spend; prefills keep a share.
+* **`max_wait_steps=8` alone** (reservation 0, so ageing is the only mechanism)
+  cuts it to 40. Ageing reorders the prefill phase so the request that has waited
+  longest is served first, and it creates a one-token floor when the reservation is
+  zero.
+
+**An important correction to the project brief's framing.** It predicts that
+decode-first starves prefills into never running. In this engine that is not quite
+what happens, and the honest version is better:
+
+* A prefill *can* be granted **zero tokens for a step** — repeatedly, while decoders
+  hold the budget. That is real, and it is why `max_wait` reaches 212 steps.
+* But **`never served` is 0 in every configuration**, because admission is ordered by
+  arrival and every request's output budget is finite, so the decode batch always
+  eventually drains and frees budget. Permanent starvation needs a decode set that
+  never drains, which this engine's `max_running_requests` cap prevents.
+
+So the failure mode is **unbounded-feeling latency, not deadlock** — and the fix
+(ageing) reduces the worst case ~5× while leaving throughput essentially unchanged
+(2,420 tok/s for decode-first against 2,399–2,485 for the balanced variants). Say it
+that way and you are describing measured behaviour; say "prefills never run" and
+someone can falsify it in one run.
+
+---
+
+## 10. How to poke at invariants yourself
 
 The check scripts are modular — run one check:
 
@@ -504,13 +646,18 @@ scheduled tokens <= max_batch_tokens             budget is a hard ceiling
 a decode step produces at most one token
 num_computed_tokens <= num_tokens
 generated_tokens <= max_new_tokens
+running requests <= max_running_requests         for every policy
 planning never mutates memory                    plans are abortable
 finished requests own zero blocks
 ```
 
+`check_policies.py` runs the budget, decode-grant, prefill, running-cap and KV
+invariant checks against **every** registered policy, so a new policy cannot be added
+without meeting the invariants the others meet.
+
 ---
 
-## 10. Reading map — question to file
+## 11. Reading map — question to file
 
 | Question | File | Key symbol |
 |---|---|---|
@@ -518,6 +665,8 @@ finished requests own zero blocks
 | What does a step decide? | `engine/scheduler.py` | `SchedulerOutput`, `ScheduledWork` |
 | How is a plan built? | `engine/policies.py` | `SchedulerBase._build_plan` |
 | How does the budget work? | `engine/policies.py` | `_chunk_size`, `_chunk_cap` |
+| Which policy does what? | `engine/policies.py` | `POLICIES`, `BalancedPolicy._reserve` |
+| How is fairness enforced? | `engine/policies.py` | `_track_waiting`, `_is_aged`, `prefill_order_key` |
 | Who gets evicted? | `engine/policies.py` | `_evict_to_fund`, `_evictable` |
 | Where does the loop live? | `engine/engine.py` | `Engine.step` |
 | Where is memory committed? | `engine/engine.py` | `_release_preempted_kv`, `_allocate_kv` |
@@ -530,9 +679,14 @@ finished requests own zero blocks
 **Suggested reading order** (each builds on the last, ~250 lines total):
 `request.py` → `scheduler.py` → `policies.py` → `engine.py` → `block_manager.py`.
 
+For the policies specifically, read `POLICIES` first (five names, five docstrings),
+then `BalancedPolicy._reserve` / `_is_aged` / `prefill_order_key` — that is the whole
+fairness story in about thirty lines. `scripts/check_policies.py` says what each
+claim is pinned to.
+
 ---
 
-## 11. Interview one-liners
+## 12. Interview one-liners
 
 These are the claims you can defend with a number:
 
@@ -563,43 +717,70 @@ These are the claims you can defend with a number:
   evictions for 60 steps and asserts the pool and every block table are bit-identical
   afterwards."* — `check_preemption.py`
 
+- *"`fcfs` and `decode_first` are the same policy in my runtime, and I can prove it:
+  a check compares the full schedule step by step and asserts they are identical.
+  Decode-first is what the default already was, so I named it instead of pretending
+  it was a second policy."* — Experiment 7
+
+- *"Static batching costs 44% of throughput and 87% more mean TTFT against continuous
+  batching — 879.5 down to 495.5 tok/s — because a freed slot sits idle until its
+  whole batch drains. It only costs anything when batch members have different
+  lengths; with identical lengths the numbers are exactly equal, and I test that
+  too."* — Experiment 7
+
+- *"Decode priority is a latency-vs-latency trade: a long prompt arriving behind a
+  full decode batch starts 2.4× sooner under prefill-first (20.4 ms vs 49.4 ms) and
+  makes the existing decoders wait 6.7× longer for their next token (17.4 ms vs
+  2.6 ms)."* — Experiment 7
+
+- *"Prefill starvation in my engine is a fairness spread, not a deadlock: a prefill
+  can get zero tokens for hundreds of steps, but everything is eventually served
+  because admission is arrival-ordered. I bounded the worst wait 5× — 212 steps to
+  40 — with ageing, at no throughput cost."* — Experiment 7
+
 ---
 
-## 12. Known limits (say these before you're asked)
+## 13. Known limits (say these before you're asked)
 
 | Limit | Status |
 |---|---|
 | Preemption is recompute-only, no swap | deliberate; recompute is cheaper to reason about |
-| Eviction is LIFO (youngest yields) | one policy; `max_wait_steps` aging exists but is unused |
+| Eviction is LIFO (youngest yields) | one rule for every policy; ageing is used by `balanced` |
 | Cost model is synthetic | stated linear model, not a GPU measurement |
 | No real attention over paged tensors | it's a block manager, not PagedAttention |
-| FCFS is the only policy so far | Phase 6 adds prefill-first / decode-first / balanced |
+| `fcfs` and `decode_first` are the same policy | tested, and stated as a finding rather than papered over |
+| `balanced` needs a useful reservation | the floor never takes the last token, but a floor of 1 token is slow |
+| No priority classes or deadlines | ageing is the only fairness mechanism |
 | A request that can never fit stalls the run | `can_ever_fit()` detects it; no rejection policy yet |
 
 ---
 
-## 13. Quick reference
+## 14. Quick reference
 
 ```bash
 # all checks
-for f in check_engine check_memory check_preemption check_metrics check_benchmark; do
+for f in check_engine check_memory check_preemption check_metrics check_benchmark check_policies; do
   python scripts/$f.py; done
 
 # demos
-python examples/demo.py             # scheduler timeline + KV occupancy
-python examples/kv_pressure.py      # preemption off vs on
-python examples/metrics_demo.py     # TTFT/ITL/TPOT/throughput
-python examples/benchmark_demo.py   # saturation, KV sweeps, arrival models
+python examples/demo.py              # scheduler timeline + KV occupancy
+python examples/kv_pressure.py       # preemption off vs on
+python examples/metrics_demo.py      # TTFT/ITL/TPOT/throughput
+python examples/benchmark_demo.py    # saturation, KV sweeps, arrival models
+python examples/policy_comparison.py # the five policies, head to head
 
 # CLI
 python -m mini_infer.cli --help
 python -m mini_infer.cli --requests 200 --arrival poisson --rate 16
+python -m mini_infer.cli --policy balanced --prefill-reservation 16 --max-wait-steps 8
+python -m mini_infer.cli --sweep policy --values decode_first,prefill_first,balanced,static
 python -m mini_infer.cli --sweep num_blocks --values 16,32,64,128 --export /tmp/r
 ```
 
 Git history, one subsystem per commit:
 
 ```
+88b22dd  hands-on testing guide, and fix a false-positive stall report
 911a3d2  workload generation, benchmark harness and text charts
 d3b91fd  metrics collection for latency, throughput and KV pressure
 6f24089  single compute cursor + speculative scheduling
