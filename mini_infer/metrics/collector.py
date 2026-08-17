@@ -19,8 +19,9 @@ comparable with how real engines report:
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 from mini_infer.engine.request import Request
 
@@ -129,6 +130,7 @@ class StepMetrics:
     kv_free_blocks: int | None
     kv_total_blocks: int | None
     num_preemptions: int
+    internal_fragmentation: float = 0.0
 
     @property
     def kv_utilization(self) -> float:
@@ -210,8 +212,20 @@ class MetricsCollector:
                 kv_free_blocks=step.free_blocks,
                 kv_total_blocks=step.total_blocks,
                 num_preemptions=step.num_preemptions,
+                internal_fragmentation=self._fragmentation(),
             )
         )
+
+    def _fragmentation(self) -> float:
+        """Tail waste in the KV pool right now: reserved capacity holding no tokens.
+
+        Sampled per step because it is only meaningful while requests are resident:
+        once a run finishes, every block is free and the final state reads as zero.
+        """
+        memory = self._engine.memory if self._engine is not None else None
+        if memory is None:
+            return 0.0
+        return memory.stats().internal_fragmentation
 
     def _metrics_for_id(self, request_id: str) -> RequestMetrics:
         if request_id not in self.requests:
@@ -271,6 +285,8 @@ class RunMetrics:
 
     peak_kv_utilization: float
     mean_kv_utilization: float
+    mean_internal_fragmentation: float
+    max_internal_fragmentation: float
 
     mean_prefill_tokens_per_step: float
     max_prefill_tokens_per_step: int
@@ -305,6 +321,7 @@ class RunMetrics:
         prefill_per_step = [s.num_prefill_tokens for s in collector.steps]
         decode_per_step = [s.num_decode_requests for s in collector.steps]
         kv = [s.kv_utilization for s in collector.steps]
+        fragmentation = [s.internal_fragmentation for s in collector.steps]
 
         return cls(
             num_requests=len(collector.requests),
@@ -332,6 +349,8 @@ class RunMetrics:
             p95_queue_time=percentile(queues, 0.95),
             peak_kv_utilization=max(kv) if kv else 0.0,
             mean_kv_utilization=_mean(kv),
+            mean_internal_fragmentation=_mean(fragmentation),
+            max_internal_fragmentation=max(fragmentation) if fragmentation else 0.0,
             mean_prefill_tokens_per_step=_mean(prefill_per_step),
             max_prefill_tokens_per_step=max(prefill_per_step) if prefill_per_step else 0,
             mean_decode_batch=_mean(decode_per_step),
@@ -367,6 +386,8 @@ class RunMetrics:
             "p95_queue_ms": round(self.p95_queue_time * 1e3, 3),
             "peak_kv_utilization": round(self.peak_kv_utilization, 4),
             "mean_kv_utilization": round(self.mean_kv_utilization, 4),
+            "mean_fragmentation": round(self.mean_internal_fragmentation, 4),
+            "max_fragmentation": round(self.max_internal_fragmentation, 4),
             "mean_prefill_tokens": round(self.mean_prefill_tokens_per_step, 2),
             "max_prefill_tokens": self.max_prefill_tokens_per_step,
             "mean_decode_batch": round(self.mean_decode_batch, 2),

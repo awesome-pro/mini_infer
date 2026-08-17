@@ -19,6 +19,7 @@ from mini_infer.benchmark.workloads import WorkloadSpec
 from mini_infer.config import EngineConfig
 from mini_infer.engine.engine import Engine
 
+
 @dataclass(frozen=True, slots=True)
 class BenchmarkCase:
     """One labelled point in a sweep."""
@@ -41,7 +42,7 @@ class SweepRow:
     result: RunResult
 
     @property
-    def metrics(self):  # noqa: ANN201 - RunMetrics, kept untyped to avoid a cycle
+    def metrics(self):
         return self.result.metrics
 
     def as_row(self) -> dict[str, object]:
@@ -122,6 +123,7 @@ class Report:
         "p95_e2e_ms",
         "mean_queue_ms",
         "peak_kv_utilization",
+        "mean_fragmentation",
         "max_decode_batch",
         "preemptions",
     )
@@ -140,6 +142,7 @@ class Report:
         "p95_e2e_ms": "E2E p95",
         "mean_queue_ms": "queue mean",
         "peak_kv_utilization": "KV peak",
+        "mean_fragmentation": "frag mean",
         "max_decode_batch": "decode batch",
         "preemptions": "evictions",
     }

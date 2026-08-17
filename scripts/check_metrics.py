@@ -17,10 +17,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from _check import check, close, report  # noqa: E402
+from _check import check, close, report
 
-from mini_infer import Engine, EngineConfig, Request, RunnerConfig  # noqa: E402
-from mini_infer.metrics import MetricsCollector, RunMetrics, percentile  # noqa: E402
+from mini_infer import Engine, EngineConfig, Request, RunnerConfig
+from mini_infer.metrics import MetricsCollector, RunMetrics, percentile
 
 ZERO_COST = RunnerConfig(
     prefill_base_ms=0.0,
@@ -137,7 +137,8 @@ def check_itl_is_the_gap_between_consecutive_tokens() -> None:
 
     gaps = metrics.inter_token_latencies
     assert len(gaps) == metrics.output_tokens - 1
-    for earlier, later, gap in zip(metrics.token_times, metrics.token_times[1:], gaps, strict=False):
+    intervals = zip(metrics.token_times, metrics.token_times[1:], gaps, strict=False)
+    for earlier, later, gap in intervals:
         close(gap, later - earlier)
 
 
@@ -302,6 +303,26 @@ def check_metrics_are_deterministic_under_a_virtual_clock() -> None:
     assert first == second, "identical workloads must produce identical metrics"
 
 
+def check_step_fragmentation_tracks_the_pool() -> None:
+    """Tail waste is sampled while requests are resident, not after they finish."""
+    engine = build()
+    engine.submit(make_request(20, 1))
+
+    engine.run_to_completion()
+
+    live = [step for step in engine.metrics.steps if step.kv_utilization > 0]
+    assert live, "the request must hold KV while it runs"
+    close(live[0].internal_fragmentation, 12 / 32, rel=1e-9)  # 20 tokens over two blocks
+    summary = engine.metrics.summary(elapsed=engine.clock.now())
+    close(summary.max_internal_fragmentation, 0.375, rel=1e-9)
+    assert summary.mean_internal_fragmentation > 0
+    assert engine.metrics.steps[-1].internal_fragmentation == 0.0, (
+        "a released pool cannot be fragmented"
+    )
+    row = summary.as_row()
+    assert "mean_fragmentation" in row and "max_fragmentation" in row
+
+
 def main() -> int:
     check("percentile matches numpy", check_percentile_matches_numpy_definition)
     check("percentile validates input", check_percentile_rejects_bad_quantiles)
@@ -315,6 +336,7 @@ def main() -> int:
     check("throughput is tokens over elapsed", check_throughput_is_tokens_over_elapsed_time)
     check("generated count matches the engine", check_generated_token_count_matches_the_engine)
     check("KV utilization comes from step state", check_kv_utilization_comes_from_step_state)
+    check("fragmentation tracks the KV pool", check_step_fragmentation_tracks_the_pool)
     check("batch metrics track the scheduler", check_batch_size_metrics_track_the_scheduler)
     check("step metrics cover every step", check_step_metrics_cover_every_engine_step)
     check("preemptions counted per request", check_preemptions_are_counted_per_request)
