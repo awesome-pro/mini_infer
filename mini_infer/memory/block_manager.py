@@ -65,7 +65,7 @@ class BlockPlan:
     the plan speculative and keeps planning separate from committing.
     """
 
-    __slots__ = ("manager", "_claims", "_victims")
+    __slots__ = ("_claims", "_victims", "manager")
 
     def __init__(
         self,
@@ -170,10 +170,6 @@ class BlockManager(Protocol):
 
     def blocks_needed_to_reach(self, request: Request, num_tokens: int) -> int: ...
 
-    def block_plan(self, claims: Mapping[str, int] | None = None) -> BlockPlan:
-        """Open a planning view for one scheduling step."""
-        return BlockPlan(self, claims)
-
     def block_plan(
         self, claims: Mapping[str, int] | None = None, victims: Mapping[str, int] | None = None
     ) -> BlockPlan:
@@ -264,10 +260,6 @@ class PagedBlockManager:
         extra = self.blocks_needed(request, num_new_tokens) - request.block_table.num_blocks
         return extra <= self.num_free_blocks()
 
-    def block_plan(self, claims: Mapping[str, int] | None = None) -> BlockPlan:
-        """Open a planning view for one scheduling step."""
-        return BlockPlan(self, claims)
-
     def block_plan(
         self, claims: Mapping[str, int] | None = None, victims: Mapping[str, int] | None = None
     ) -> BlockPlan:
@@ -302,7 +294,8 @@ class PagedBlockManager:
         admitting it can only deadlock the engine, so a benchmark should say so
         rather than report a stall.
         """
-        return blocks_for_tokens(request.tokens_needed_in_full(), self.block_size) <= self.num_blocks
+        needed = blocks_for_tokens(request.tokens_needed_in_full(), self.block_size)
+        return needed <= self.num_blocks
 
     def max_prefill_chunk(
         self,

@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 from mini_infer.engine.request import Request
 
 
-class ScheduledKind(str, Enum):
+class ScheduledKind(StrEnum):
     """What kind of work a scheduled token count represents."""
 
     PREFILL = "prefill"

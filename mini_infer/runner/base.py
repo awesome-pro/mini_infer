@@ -39,6 +39,8 @@ class ModelRunner(Protocol):
         """
         ...
 
-    def time_step(self, output: SchedulerOutput, *, context_lengths: dict[str, int]) -> TimingResult:
+    def time_step(
+        self, output: SchedulerOutput, *, context_lengths: dict[str, int]
+    ) -> TimingResult:
         """Report the modelled (or measured) duration of the step."""
         ...

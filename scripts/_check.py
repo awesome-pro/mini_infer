@@ -19,7 +19,7 @@ def check(description: str, fn: Callable[[], Any]) -> None:
     global _PASSED
     try:
         fn()
-    except Exception as exc:  # noqa: BLE001 - report everything, keep going
+    except Exception as exc:
         _FAILURES.append(f"{description}: {type(exc).__name__}: {exc}")
     else:
         _PASSED += 1

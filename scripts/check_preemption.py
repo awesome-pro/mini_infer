@@ -13,11 +13,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from _check import check, report  # noqa: E402
+from _check import check, report
 
-from mini_infer import Engine, EngineConfig, Request, RunnerConfig  # noqa: E402
-from mini_infer.engine.engine import StepEventKind  # noqa: E402
-from mini_infer.engine.request import RequestStatus  # noqa: E402
+from mini_infer import Engine, EngineConfig, Request, RunnerConfig
+from mini_infer.engine.engine import StepEventKind
+from mini_infer.engine.request import RequestStatus
 
 ZERO_COST = RunnerConfig(
     prefill_base_ms=0.0,
@@ -39,7 +39,9 @@ def make_request(
     )
 
 
-def pressure_engine(num_blocks: int, block_size: int, *, preemption: bool, runners: int = 4) -> Engine:
+def pressure_engine(
+    num_blocks: int, block_size: int, *, preemption: bool, runners: int = 4
+) -> Engine:
     return Engine(
         EngineConfig(
             max_batch_tokens=64,
@@ -102,7 +104,7 @@ def check_every_step_has_consistent_blocks() -> None:
     for i in range(5):
         engine.submit(make_request(8, 16, req_id=f"R{i}"))
 
-    for step in engine.run():
+    for _ in engine.run():
         memory = engine.memory
         assert memory is not None
         memory.assert_invariants()
@@ -241,7 +243,10 @@ def check_preemption_events_are_reported() -> None:
 
 def main() -> int:
     check("preemption rewinds the victim's prefill", check_preemption_rewinds_a_victims_prefill)
-    check("preemption preserves output, recomputes prompt", check_preemption_preserves_output_and_recomputes_prompt)
+    check(
+        "preemption preserves output, recomputes prompt",
+        check_preemption_preserves_output_and_recomputes_prompt,
+    )
     check("block tables stay consistent every step", check_every_step_has_consistent_blocks)
     check("late requests get through under pressure", check_preemption_lets_late_requests_through)
     check("over-subscribed workloads stall cleanly", check_over_subscribed_workload_stalls_cleanly)

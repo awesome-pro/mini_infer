@@ -12,16 +12,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from _check import check, close, expect_raises, report  # noqa: E402
+from _check import check, close, expect_raises, report
 
-from mini_infer.clock import Clock, VirtualClock, WallClock  # noqa: E402
-from mini_infer.config import EngineConfig, RunnerConfig  # noqa: E402
-from mini_infer.engine.engine import Engine, StepEventKind  # noqa: E402
-from mini_infer.engine.request import Request, RequestStatus  # noqa: E402
-from mini_infer.engine.scheduler import (  # noqa: E402
+from mini_infer.clock import Clock, VirtualClock, WallClock
+from mini_infer.config import EngineConfig, RunnerConfig
+from mini_infer.engine.engine import Engine, StepEventKind
+from mini_infer.engine.request import Request, RequestStatus
+from mini_infer.engine.scheduler import (
     ScheduledKind,
-    SchedulerOutput,
     ScheduledWork,
+    SchedulerOutput,
 )
 
 
@@ -88,7 +88,9 @@ def check_request_lifecycle() -> None:
 
 def check_request_validation() -> None:
     expect_raises(
-        ValueError, "prompt_tokens", lambda: Request(prompt_tokens=[], max_new_tokens=1, arrival_time=0.0)
+        ValueError,
+        "prompt_tokens",
+        lambda: Request(prompt_tokens=[], max_new_tokens=1, arrival_time=0.0),
     )
     expect_raises(ValueError, "max_new_tokens", lambda: make_request(4, -1))
 
@@ -174,7 +176,9 @@ def check_config_validation() -> None:
         "dtype_bytes",
     ):
         expect_raises(ValueError, field, lambda f=field: EngineConfig(**{f: 0}))
-    expect_raises(ValueError, "prefill_ms_per_token", lambda: RunnerConfig(prefill_ms_per_token=-1.0))
+    expect_raises(
+        ValueError, "prefill_ms_per_token", lambda: RunnerConfig(prefill_ms_per_token=-1.0)
+    )
 
     config = EngineConfig()
     assert config.kv_capacity_tokens == config.num_blocks * config.block_size
@@ -324,7 +328,9 @@ def check_past_arrival_is_clamped() -> None:
 def check_duplicate_ids_rejected() -> None:
     engine = Engine(tiny_config())
     engine.submit(make_request(2, 1, req_id="dup"))
-    expect_raises(ValueError, "duplicate request id", lambda: engine.submit(make_request(2, 1, req_id="dup")))
+    expect_raises(
+        ValueError, "duplicate request id", lambda: engine.submit(make_request(2, 1, req_id="dup"))
+    )
     expect_raises(
         ValueError,
         "duplicate request id",
@@ -422,7 +428,10 @@ def main() -> int:
     check("clock protocols", check_clocks)
     check("single request to completion", check_single_request_runs_to_completion)
     check("budget wins over prompt size", check_budget_always_wins_over_prompt_size)
-    check("unchunked prefill is one shot when it fits", check_chunking_off_prefills_in_budget_sized_bites)
+    check(
+        "unchunked prefill is one shot when it fits",
+        check_chunking_off_prefills_in_budget_sized_bites,
+    )
     check("chunk cap binds when chunking is on", check_chunking_on_respects_the_chunk_cap)
     check("a giant prompt never starves", check_a_giant_prompt_does_not_starve_forever)
     check("token budget never exceeded", check_token_budget_never_exceeded)
@@ -434,7 +443,10 @@ def main() -> int:
     check("duplicate ids rejected", check_duplicate_ids_rejected)
     check("event lifecycle", check_event_lifecycle)
     check("zero output budget finishes at prefill", check_zero_output_budget_finishes_after_prefill)
-    check("idle engine terminates and reports its stall", check_idle_engine_terminates_and_reports_the_stall)
+    check(
+        "idle engine terminates and reports its stall",
+        check_idle_engine_terminates_and_reports_the_stall,
+    )
     check("step duration matches cost model", check_step_duration_matches_cost_model)
     check("decode cost scales with context", check_decode_cost_scales_with_context)
     return report("phase 1 skeleton")

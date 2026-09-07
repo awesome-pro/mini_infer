@@ -12,8 +12,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mini_infer import Engine, EngineConfig, Request, RunnerConfig  # noqa: E402
-from mini_infer.metrics import RunMetrics  # noqa: E402
+from mini_infer import Engine, EngineConfig, Request, RunnerConfig
+from mini_infer.metrics import RunMetrics
 
 
 def build_requests() -> list[Request]:
@@ -90,7 +90,9 @@ def print_report(metrics: RunMetrics) -> None:
             for value in (mean, p50, p95, p99)
         )
         print(f"  {label:22s}{cells}")
-    print(f"  {'TPOT (per token)':22s}{metrics.mean_tpot * 1e3:>10.2f}{metrics.p50_tpot * 1e3:>10.2f}"
+    print(
+        f"  {'TPOT (per token)':22s}{metrics.mean_tpot * 1e3:>10.2f}"
+        f"{metrics.p50_tpot * 1e3:>10.2f}"
           f"{metrics.p95_tpot * 1e3:>10.2f}{'-':>10}")
     print(f"  {'queue time':22s}{metrics.mean_queue_time * 1e3:>10.2f}{'-':>10}"
           f"{metrics.p95_queue_time * 1e3:>10.2f}{'-':>10}")

@@ -16,14 +16,15 @@ import csv
 import json
 import sys
 import tempfile
+from itertools import pairwise
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from _check import check, close, expect_raises, report  # noqa: E402
+from _check import check, expect_raises, report
 
-from mini_infer import Engine, EngineConfig, RunnerConfig  # noqa: E402
-from mini_infer.benchmark import (  # noqa: E402
+from mini_infer import Engine, EngineConfig, RunnerConfig
+from mini_infer.benchmark import (
     Driver,
     Report,
     WorkloadSpec,
@@ -34,7 +35,7 @@ from mini_infer.benchmark import (  # noqa: E402
     write_csv,
     write_json,
 )
-from mini_infer.benchmark.workloads import Constant, LogNormal, Uniform  # noqa: E402
+from mini_infer.benchmark.workloads import Constant, LogNormal, Uniform
 
 FAST_RUNNER = RunnerConfig(
     prefill_base_ms=1.0,
@@ -119,7 +120,9 @@ def check_unknown_profiles_are_rejected() -> None:
 
 def check_spec_validates_itself() -> None:
     expect_raises(ValueError, "num_requests", lambda: WorkloadSpec(num_requests=0))
-    expect_raises(ValueError, "unknown arrival", lambda: WorkloadSpec(num_requests=1, arrival="nope"))
+    expect_raises(
+        ValueError, "unknown arrival", lambda: WorkloadSpec(num_requests=1, arrival="nope")
+    )
     expect_raises(
         ValueError, "rate must be", lambda: WorkloadSpec(num_requests=1, arrival="poisson", rate=0)
     )
@@ -170,9 +173,9 @@ def check_poisson_rate_matches_the_requested_load() -> None:
             break
         now = max(now, arrival)
         driver.coordinate(now)
-        arrivals.append(driver._last_arrival)  # noqa: SLF001 - observing the schedule
+        arrivals.append(driver._last_arrival)
 
-    gaps = [b - a for a, b in zip(arrivals, arrivals[1:], strict=False)]
+    gaps = [later - earlier for earlier, later in pairwise(arrivals)]
     mean_gap = sum(gaps) / len(gaps)
     assert abs(mean_gap - 1.0 / 25.0) < 0.01, f"mean gap {mean_gap} should be near 0.04"
 

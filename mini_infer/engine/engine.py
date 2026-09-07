@@ -10,7 +10,7 @@ from __future__ import annotations
 import heapq
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Protocol
 
 from mini_infer.clock import Clock, VirtualClock
@@ -23,7 +23,7 @@ from mini_infer.runner.base import ModelRunner
 from mini_infer.runner.simulated_runner import SimulatedModelRunner
 
 
-class StepEventKind(str, Enum):
+class StepEventKind(StrEnum):
     ADMITTED = "admitted"
     PREFILLED = "prefilled"
     DECODED = "decoded"

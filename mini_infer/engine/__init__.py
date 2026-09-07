@@ -13,7 +13,7 @@ from mini_infer.engine.policies import (
     policy_names,
 )
 from mini_infer.engine.request import Request, RequestStatus
-from mini_infer.engine.scheduler import ScheduledKind, SchedulerOutput, ScheduledWork
+from mini_infer.engine.scheduler import ScheduledKind, ScheduledWork, SchedulerOutput
 
 __all__ = [
     "POLICIES",
@@ -26,9 +26,9 @@ __all__ = [
     "Request",
     "RequestStatus",
     "ScheduledKind",
+    "ScheduledWork",
     "SchedulerBase",
     "SchedulerOutput",
-    "ScheduledWork",
     "StaticBatchPolicy",
     "StepEvent",
     "StepEventKind",

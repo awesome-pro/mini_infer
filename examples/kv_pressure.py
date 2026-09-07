@@ -14,9 +14,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mini_infer import Engine, EngineConfig, Request, RunnerConfig  # noqa: E402
-from mini_infer.engine.engine import StepEventKind  # noqa: E402
-from mini_infer.visualizations import kv_pool_lines, timeline_lines  # noqa: E402
+from mini_infer import Engine, EngineConfig, Request, RunnerConfig
+from mini_infer.engine.engine import StepEventKind
+from mini_infer.visualizations import kv_pool_lines, timeline_lines
 
 NUM_BLOCKS = 16
 BLOCK_SIZE = 8

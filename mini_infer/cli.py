@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-
 from dataclasses import replace
 
 from mini_infer.benchmark.benchmark import (

@@ -8,28 +8,29 @@ Run with::
 from __future__ import annotations
 
 import sys
+from itertools import pairwise
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from _check import check, expect_raises, report  # noqa: E402
+from _check import check, expect_raises, report
 
-from mini_infer import Engine, EngineConfig, Request, RunnerConfig  # noqa: E402
-from mini_infer.benchmark.benchmark import BenchmarkCase  # noqa: E402
-from mini_infer.benchmark.driver import Driver  # noqa: E402
-from mini_infer.benchmark.workloads import (  # noqa: E402
+from mini_infer import Engine, EngineConfig, Request, RunnerConfig
+from mini_infer.benchmark.benchmark import BenchmarkCase
+from mini_infer.benchmark.driver import Driver
+from mini_infer.benchmark.workloads import (
     Constant,
     LengthProfile,
     Uniform,
     WorkloadSpec,
 )
-from mini_infer.engine.policies import (  # noqa: E402
+from mini_infer.engine.policies import (
     POLICIES,
     SchedulerBase,
     build_policy,
     policy_names,
 )
-from mini_infer.engine.request import RequestStatus  # noqa: E402
+from mini_infer.engine.request import RequestStatus
 
 ZERO_COST = RunnerConfig(
     prefill_base_ms=0.0,
@@ -382,7 +383,7 @@ def check_static_batching_never_refills_mid_batch() -> None:
 
     waves = admission_waves(engine)
     assert len(waves) >= 2, "a static run should form several batches"
-    for (_, _, earlier), (_, _, later) in zip(waves, waves[1:]):
+    for (_, _, earlier), (_, _, later) in pairwise(waves):
         assert max(earlier) < min(later), (
             "a new request joined while the previous batch was still running"
         )

@@ -13,10 +13,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from _check import check, expect_raises, report  # noqa: E402
+from _check import check, expect_raises, report
 
-from mini_infer import Engine, EngineConfig, Request, RequestStatus, RunnerConfig  # noqa: E402
-from mini_infer.memory.block_manager import (  # noqa: E402
+from mini_infer import Engine, EngineConfig, Request, RequestStatus, RunnerConfig
+from mini_infer.memory.block_manager import (
     PagedBlockManager,
     blocks_for_tokens,
 )
@@ -30,7 +30,9 @@ ZERO_COST = RunnerConfig(
 )
 
 
-def make_request(prompt_len: int, max_new_tokens: int, arrival: float = 0.0, req_id: str = "") -> Request:
+def make_request(
+    prompt_len: int, max_new_tokens: int, arrival: float = 0.0, req_id: str = ""
+) -> Request:
     return Request(
         prompt_tokens=list(range(prompt_len)),
         max_new_tokens=max_new_tokens,
@@ -334,17 +336,33 @@ def main() -> int:
     check("block manager argument validation", check_paged_block_manager_validates_arguments)
     check("allocation/free conserve capacity", check_allocation_and_free_conserve_capacity)
     check("blocks are never owned twice", check_blocks_are_never_owned_twice)
-    check("exhaustion raises, never overcommits", check_exhaustion_raises_rather_than_overcommitting)
+    check(
+        "exhaustion raises, never overcommits", check_exhaustion_raises_rather_than_overcommitting
+    )
     check("freeing an unowned block is rejected", check_freeing_an_unowned_block_is_rejected)
     check("partial tail block is reused", check_partial_tail_block_is_reused_before_a_new_block)
     check("stats report fragmentation", check_stats_report_fragmentation)
-    check("engine blocks match each sequence", check_engine_allocates_blocks_that_match_each_sequence)
+    check(
+        "engine blocks match each sequence", check_engine_allocates_blocks_that_match_each_sequence
+    )
     check("KV limits prefill chunk size", check_kv_limits_prefill_chunk_size)
     check("chunk size is limited by free blocks", check_chunk_size_is_limited_by_free_blocks)
-    check("admission control refuses what cannot fit", check_admission_control_waits_instead_of_overcommitting)
-    check("unfittable request stalls cleanly", check_unfittable_request_stalls_cleanly_instead_of_corrupting_kv)
-    check("finished requests release KV for the next", check_finished_requests_return_their_kv_for_the_next_one)
-    check("small pool serves many requests without leaking", check_many_requests_share_a_small_pool_without_leaking)
+    check(
+        "admission control refuses what cannot fit",
+        check_admission_control_waits_instead_of_overcommitting,
+    )
+    check(
+        "unfittable request stalls cleanly",
+        check_unfittable_request_stalls_cleanly_instead_of_corrupting_kv,
+    )
+    check(
+        "finished requests release KV for the next",
+        check_finished_requests_return_their_kv_for_the_next_one,
+    )
+    check(
+        "small pool serves many requests without leaking",
+        check_many_requests_share_a_small_pool_without_leaking,
+    )
     check("randomized workload holds invariants", check_randomized_workload_holds_all_invariants)
     return report("phase 2 block-based KV manager")
 

@@ -17,7 +17,7 @@ from mini_infer.engine.policies import (
     policy_names,
 )
 from mini_infer.engine.request import Request, RequestStatus
-from mini_infer.engine.scheduler import SchedulerOutput, ScheduledKind, ScheduledWork
+from mini_infer.engine.scheduler import ScheduledKind, ScheduledWork, SchedulerOutput
 from mini_infer.metrics.collector import MetricsCollector, RunMetrics
 
 __all__ = [

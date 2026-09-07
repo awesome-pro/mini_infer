@@ -13,8 +13,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mini_infer import Engine, EngineConfig, Request, RunnerConfig  # noqa: E402
-from mini_infer.visualizations import kv_pool_lines, timeline_lines  # noqa: E402
+from mini_infer import Engine, EngineConfig, Request, RunnerConfig
+from mini_infer.visualizations import kv_pool_lines, timeline_lines
 
 PROMPTS = {"R1": 80, "R2": 12, "R3": 300, "R4": 8}
 ARRIVALS = {"R1": 0.0, "R2": 0.0, "R3": 1.0, "R4": 3.0}

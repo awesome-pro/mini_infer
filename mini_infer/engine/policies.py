@@ -40,7 +40,7 @@ from collections.abc import Sequence
 
 from mini_infer.config import EngineConfig
 from mini_infer.engine.request import Request, RequestStatus
-from mini_infer.engine.scheduler import ScheduledKind, SchedulerOutput, ScheduledWork
+from mini_infer.engine.scheduler import ScheduledKind, ScheduledWork, SchedulerOutput
 from mini_infer.memory.block_manager import (
     BlockPlan,
     PagedBlockManager,

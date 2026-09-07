@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 from mini_infer.block_table import BlockTable
 
 _id_counter = itertools.count()
 
 
-class RequestStatus(str, Enum):
+class RequestStatus(StrEnum):
     """Lifecycle of a request.
 
     ``WAITING -> PREFILLING -> DECODING -> FINISHED``, plus ``PREEMPTED`` for a

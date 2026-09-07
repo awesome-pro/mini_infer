@@ -58,11 +58,11 @@ def bars(
 
     for label, value, text in zip(labels, values, texts, strict=True):
         if value != value:  # NaN: the metric is undefined for this run
-            lines.append(f"  {str(label):>{label_width}}  {'':<{width}} {'-':>{value_width}}")
+            lines.append(f"  {label!s:>{label_width}}  {'':<{width}} {'-':>{value_width}}")
             continue
-        length = max(1, int(round(value / top * width))) if value > 0 else 0
+        length = max(1, round(value / top * width)) if value > 0 else 0
         lines.append(
-            f"  {str(label):>{label_width}}  {bar * length:<{width}} "
+            f"  {label!s:>{label_width}}  {bar * length:<{width}} "
             f"{text:>{value_width}}{unit}"
         )
     return "\n".join(lines)
