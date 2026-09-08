@@ -3,7 +3,7 @@
 How to run, observe, poke at, and explain what's been built. Everything here is
 tested; every number shown is from an actual run on this machine.
 
-**Status:** 7 of 8 phases done, 124 checks passing, 8 commits.
+**Status:** 7 of 8 phases done, 124 checks passing, 11 commits.
 
 ```
 mini_infer/engine/      request model, scheduling contract, policies, engine loop
@@ -802,6 +802,9 @@ python -m mini_infer.cli --sweep num_blocks --values 16,32,64,128 --export /tmp/
 Git history, one subsystem per commit:
 
 ```
+ed1aa5f  make the tree pass the ruff configuration it already declares
+cbf5a22  generated figures, and the README write-up they support
+cb5a74d  scheduling policies, fairness knobs and a policy comparison
 88b22dd  hands-on testing guide, and fix a false-positive stall report
 911a3d2  workload generation, benchmark harness and text charts
 d3b91fd  metrics collection for latency, throughput and KV pressure
@@ -809,6 +812,7 @@ d3b91fd  metrics collection for latency, throughput and KV pressure
 3d6790e  KV admission control and recompute preemption
 7603c43  block-based KV cache manager
 7f4e4ab  runtime skeleton (request model, config, clock, engine loop)
+b7c4e71  init
 ```
 
 ---
