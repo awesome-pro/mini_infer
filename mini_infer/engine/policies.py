@@ -60,9 +60,21 @@ class SchedulerBase:
     name = "base"
     phase_order: tuple[str, ...] = PHASE_ORDER
 
-    def __init__(self, config: EngineConfig, memory: PagedBlockManager | None = None) -> None:
+    def __init__(
+        self,
+        config: EngineConfig,
+        memory: PagedBlockManager | None = None,
+        *,
+        pending_decode_token: bool = False,
+    ) -> None:
         self.config = config
         self.memory = memory
+        #: True when a decoding request carries one uncomputed position: the token a
+        #: real forward sampled, whose KV the next step computes. A simulated runner
+        #: samples nothing, so every position it reports is already accounted for.
+        #: This is the *only* thing the two conventions disagree about, and it decides
+        #: which phase owns a decoding request's remaining positions.
+        self.pending_decode_token = pending_decode_token
         #: Transactional view of the KV pool for the step being planned.
         self.plan: BlockPlan | None = BlockPlan(memory) if memory is not None else None
         self._requirements: dict[str, int] = {}
@@ -101,6 +113,19 @@ class SchedulerBase:
             preemptions=preemptions,
             allocations=self.plan.claims() if self.plan is not None else {},
         )
+
+    def _is_decode_work(self, request: Request) -> bool:
+        """Whether the decode phase owns this request's remaining positions.
+
+        A decoding request normally owes the decode phase one token. After a
+        preemption it can owe the prefill phase several *already generated* positions,
+        which must be recomputed rather than decoded — decoding them would append new
+        tokens while leaving the old ones uncached.
+        """
+        if request.status is not RequestStatus.DECODING:
+            return False
+        pending = 1 if self.pending_decode_token else 0
+        return request.num_uncomputed_tokens <= pending
 
     def _reset_step_state(self) -> None:
         self.plan = BlockPlan(self.memory) if self.memory is not None else None
@@ -157,8 +182,9 @@ class SchedulerBase:
         for request in sorted(running, key=self.decode_order_key):
             if len(work) >= self.config.max_running_requests:
                 break
-            if request.status is not RequestStatus.DECODING:
-                # A request still mid-prompt is served by the prefill phase.
+            if not self._is_decode_work(request):
+                # A request still mid-prompt (or recomputing generated positions) is
+                # served by the prefill phase.
                 continue
             if request.is_finished or (plan is not None and plan.is_evicted(request.id)):
                 continue
@@ -207,6 +233,10 @@ class SchedulerBase:
             if request.num_uncomputed_tokens == 0 or (
                 self.plan is not None and self.plan.is_evicted(request.id)
             ):
+                continue
+            if self._is_decode_work(request):
+                # The decode phase already owns this request's remaining position;
+                # scheduling it here too would grant one request two chunks in a step.
                 continue
             new_admission = request.id not in active
             if new_admission and occupied >= self.config.max_running_requests:
@@ -325,11 +355,14 @@ class SchedulerBase:
     # ------------------------------------------------------------------ hooks
 
     def _decode_extra_blocks(self, request: Request) -> int:
-        """Blocks the request's next decode token needs beyond what it holds."""
+        """Blocks the position this decode step will compute needs beyond what it holds.
+
+        A simulated runner keeps the cursor and the sequence in lockstep, so the
+        position it computes is ``num_tokens``; a runner with real logits keeps one
+        token pending, so it is ``num_computed_tokens``. Both are ``cursor + 1``.
+        """
         assert self.plan is not None
-        needed = self.plan.manager.blocks_needed_to_reach(
-            request, request.num_tokens + 1
-        )
+        needed = self.plan.manager.blocks_needed_to_reach(request, request.context_at_step(1))
         return max(0, needed - request.block_table.num_blocks)
 
     def _blocks_for_prefill(self, request: Request) -> int:
@@ -536,7 +569,11 @@ def policy_names() -> tuple[str, ...]:
 
 
 def build_policy(
-    name: str, config: EngineConfig, *, memory: PagedBlockManager | None = None
+    name: str,
+    config: EngineConfig,
+    *,
+    memory: PagedBlockManager | None = None,
+    pending_decode_token: bool = False,
 ) -> SchedulerBase:
     """Instantiate a scheduling policy by name."""
     try:
@@ -545,4 +582,4 @@ def build_policy(
         raise ValueError(
             f"unknown policy {name!r}; available: {', '.join(policy_names())}"
         ) from None
-    return policy_cls(config, memory=memory)
+    return policy_cls(config, memory=memory, pending_decode_token=pending_decode_token)

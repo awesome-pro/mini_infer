@@ -5,7 +5,7 @@ management — built from scratch to study what a serving scheduler actually tra
 away.**
 
 ```text
-Python 3.12+   ·   zero runtime dependencies   ·   124 checks, no test framework
+Python 3.12+   ·   zero runtime dependencies   ·   139 checks, no test framework
 5 scheduling policies   ·   3 arrival processes   ·   13 figures, all generated from real runs
 ```
 
@@ -110,11 +110,15 @@ git clone <this repo> && cd mini_infer
 python -m venv .venv && source .venv/bin/activate
 pip install -e .                      # no runtime dependencies
 
-# 124 checks, no test framework: seven scripts of plain asserts
+# 139 checks, no test framework: eight scripts of plain asserts
 for f in check_engine check_memory check_preemption check_metrics check_benchmark \
-         check_policies check_visualizations; do python scripts/$f.py; done
+         check_policies check_visualizations check_torch_runner; do python scripts/$f.py; done
 
-# runnable demos, each showing one idea
+# a real model through the scheduler, streaming tokens (needs the torch extra)
+pip install -e ".[torch]"
+python examples/real_model.py --model HuggingFaceTB/SmolLM2-135M-Instruct
+
+# runnable demos of the simulated runtime, each showing one idea
 python examples/demo.py                # a scheduler timeline and KV occupancy
 python examples/kv_pressure.py         # preemption off vs on
 python examples/policy_comparison.py   # the five policies, head to head
@@ -129,7 +133,7 @@ python -m mini_infer.cli --sweep max_batch_tokens --values 16,32,64,128 --export
 pip install -e ".[plot]" && python scripts/make_figures.py
 ```
 
-`TESTING.md` is the hands-on guide: seven experiments with expected output, a reading
+`TESTING.md` is the hands-on guide: eight experiments with expected output, a reading
 order, and the invariants to poke at yourself.
 
 ---
@@ -260,7 +264,7 @@ what says so.
 | KV pool | Throughput | p95 TTFT | Evictions | Finished |
 |---|---|---|---|---|
 | 8 blocks | 472.0 tok/s | 8,461.3 ms | 416 | 120/120 |
-| 16 blocks | 847.0 tok/s | 1,519.5 ms | 323 | 120/120 |
+| 16 blocks | 849.3 tok/s | 1,575.6 ms | 298 | 120/120 |
 | 32 blocks | 1,033.5 tok/s | 144.2 ms | 52 | 120/120 |
 | 64 blocks | 1,036.0 tok/s | 12.7 ms | 2 | 120/120 |
 | 128 blocks | 1,036.0 tok/s | 11.7 ms | 0 | 120/120 |
@@ -407,6 +411,83 @@ they differ only in who gets the step, or (for `static`) who is allowed to join 
 
 ---
 
+## A real model in the same runtime
+
+Everything above runs on a modelled execution cost, on purpose: it makes thousands of
+scheduling experiments reproducible in seconds. The same scheduler, block manager and
+engine also drive a **real transformer with real KV tensors**, which is what turns the
+block manager from bookkeeping into memory a model attends over.
+
+```bash
+pip install -e ".[torch]"
+python examples/real_model.py --model HuggingFaceTB/SmolLM2-135M-Instruct \
+    --prompt "Explain continuous batching in one sentence:" --max-new-tokens 24
+```
+
+```text
+model  : HuggingFaceTB/SmolLM2-135M-Instruct
+shape  : 30 layers, 9 heads (3 kv), head_dim 64, float32
+kv pool: 128 blocks x 16 tokens = 90.0 MiB
+budget : 64 tokens/step, 1 concurrent requests
+
+── prompt 0: 'Explain continuous batching in one sentence:' (8 tokens)
+[p0] "
+[p0] The
+[p0]  company
+[p0] 's
+[p0]  sales
+[p0]  team
+[p0]  is
+[p0]  responsible
+[p0]  for
+...
+[p0] 24/24 tokens: '\n\n"The company\'s sales team is responsible for managing the production of the products, which are then shipped to the'
+
+steps=24 generated=24 throughput=75.1 tok/s ttft=39.9ms tpot=12.1ms kv_peak=1.6% evictions=0 wall=0.32s
+```
+
+(An instruct checkpoint still continues the prompt rather than answering it: the demo
+feeds raw text and does no chat templating. Prompt formatting is a serving-layer concern;
+this project is the scheduler and the cache underneath it.)
+
+**How it works.** KV lives in `[layers, blocks, kv_heads, block_size, head_dim]` tensors.
+Logical block *i* of a request maps to a physical block through its block table, so the
+tensors attention reads are the tensors the pool owns. Each step flattens every scheduled
+request's chunk into **one** token sequence and runs **one** forward pass over it:
+per layer, the freshly computed keys and values are written into their physical blocks,
+each request's cached context is gathered back out by block table, and a block-diagonal
+causal mask keeps requests from attending to each other. That is continuous batching with
+a real model attached — the batch *is* the step.
+
+**Why this can be trusted.** Not because the text looks plausible — a wrong rotation or a
+truncated dtype still yields plausible tokens. It is pinned against HuggingFace's own
+forward pass:
+
+| Check | Result |
+|---|---|
+| Sampled logits vs `AutoModelForCausalLM` | max difference **6e-08** in float32 |
+| The same, in float64 | max difference **5.6e-17** — machine precision |
+| Greedy tokens vs `model.generate` | identical |
+| Chunked prefill, `block_size=1`, batching, preemption | identical tokens in every case |
+
+The float64 row is the strong one: agreement to machine precision rules out a
+*mathematically* different computation and leaves only float32 accumulation order.
+
+**Two consequences worth knowing.** A real forward samples the next token *while*
+computing the positions it was granted, so a decoding request always carries exactly one
+position whose KV is still pending, and the first token lands at the end of prefill —
+which is where a server first has something to stream, and so where TTFT belongs. And
+because a runner that attends over the pool cannot compute before its blocks exist, the
+engine commits that runner's allocations *before* it executes, while the simulated runner
+keeps the strictly-speculative order. Both paths are exercised by the check suite, and the
+simulated one is pinned by regenerating all thirteen figures. They come back
+identical except for one row of the KV-pressure sweep, which changed by 25 fewer
+evictions: stopping the decode phase from also granting a token to a request that is
+still recomputing generated positions — the bug that motivated the change — shifts a
+recompute-heavy schedule. The commit for this phase says the same thing.
+
+---
+
 ## What is measured
 
 Definitions follow the ones vLLM publishes, so the numbers mean what a serving engineer
@@ -438,7 +519,8 @@ Stated up front, because a runtime project is judged by what it knows it does no
 | Limitation | Status |
 |---|---|
 | Execution cost is a stated linear model, not a GPU | deliberate: fast, deterministic, comparative |
-| No attention over paged tensors | it is a block manager, not PagedAttention |
+| No fused paged-attention kernel | the real runner gathers blocks into contiguous tensors; it is a correct implementation, not a fast one |
+| The real runner is CPU-only and small-model | no batching kernel, no CUDA, no tensor parallelism |
 | Preemption recomputes; there is no swap path | recompute is cheaper to reason about; swap is future work |
 | `fcfs` and `decode_first` are the same schedule | tested and labelled a finding, not hidden |
 | No prefix caching | the best next feature: hash full prompt blocks and share them |
@@ -457,9 +539,13 @@ python -m mini_infer.cli --requests 120 --arrival poisson --rate 16
 # every figure in this README, from a fixed seed
 python scripts/make_figures.py                 # writes figures/*.png
 
-# the full check suite (124 checks)
+# the full check suite (139 checks)
 for f in check_engine check_memory check_preemption check_metrics check_benchmark \
-         check_policies check_visualizations; do python scripts/$f.py; done
+         check_policies check_visualizations check_torch_runner; do python scripts/$f.py; done
+
+# the real runner: paged attention, verified against HuggingFace
+python examples/real_model.py --concurrency 3
+python scripts/check_torch_runner.py
 ```
 
 ## Repository layout
@@ -468,12 +554,12 @@ for f in check_engine check_memory check_preemption check_metrics check_benchmar
 mini_infer/
   engine/       request model, scheduling contract, policies, the execution loop
   memory/       KV block pool; BlockPlan is a transactional view of it
-  runner/       execution-cost model (and the seam for a real model runner)
+  runner/       execution-cost model, and the real torch runner with a paged KV pool
   metrics/      TTFT / ITL / TPOT / throughput / KV utilization / fragmentation
   benchmark/    arrival processes, workload generation, driver, sweeps, exports
   visualizations/  text timelines and charts, plus the matplotlib figures
 scripts/        check_*.py (plain asserts) and make_figures.py
-examples/       five runnable demos, each showing one idea
+examples/       six runnable demos, each showing one idea
 figures/        generated by scripts/make_figures.py, committed for the README
 ```
 
@@ -483,13 +569,13 @@ figures/        generated by scripts/make_figures.py, committed for the README
 
 ## Where this goes next
 
-1. **A real model runner** (`RunnerConfig` → `TorchModelRunner`): greedy decode over real
-   KV tensors, which turns the block manager from bookkeeping into memory that a model
-   actually attends over.
-2. **Prefix caching**: hash full prompt blocks and share them between requests with a
-   common prefix — the highest-value feature still missing.
-3. **Swap-based preemption**: copy a victim's blocks to host memory instead of recomputing,
+1. **Prefix caching**: hash full prompt blocks and share them between requests with a
+   common prefix — the highest-value feature still missing, and now a real one, because the
+   blocks hold real tensors.
+2. **Swap-based preemption**: copy a victim's blocks to host memory instead of recomputing,
    and measure which wins as a function of prompt length.
+3. **A fused paged-attention kernel**: the gather is the price of correctness; a kernel that
+   reads blocks in place is the price of speed.
 
 ---
 

@@ -29,7 +29,22 @@ class TimingResult:
 
 
 class ModelRunner(Protocol):
-    """Executes one :class:`SchedulerOutput`."""
+    """Executes one :class:`SchedulerOutput`.
+
+    Two runner styles are supported, distinguished by ``attends_over_kv``:
+
+    * A **simulated** runner models the cost and returns placeholder tokens. It needs
+      nothing from the KV pool, so the engine commits allocations after it returns and
+      the sequence advances in lockstep with the cursor.
+    * A runner that **attends over the KV blocks** cannot compute without them, so the
+      engine commits its allocations before it runs, and it samples a token for every
+      request it is given. See :attr:`attends_over_kv`.
+    """
+
+    #: Set by runners that read and write the engine's physical KV blocks. Such a
+    #: runner needs its blocks committed *before* it executes, and it returns a
+    #: sampled token for every scheduled request rather than only for decodes.
+    attends_over_kv: bool = False
 
     def execute(self, output: SchedulerOutput, *, context_lengths: dict[str, int]) -> RunnerResult:
         """Perform the scheduled work and return sampled tokens.

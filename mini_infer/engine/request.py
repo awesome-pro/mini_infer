@@ -165,6 +165,22 @@ class Request:
         if self.first_token_time is None:
             self.first_token_time = now
 
+    def on_sampled(self, token: int, now: float) -> None:
+        """Append a token a real forward pass sampled, leaving the cursor behind it.
+
+        A runner with real logits samples the next token while computing the positions
+        it was granted, so the token it produces has no KV yet: the sequence grows by
+        one while the cursor stays where it is, and the *next* step computes that
+        position. The result is one pending position per decoding request, which is
+        what the decode phase is for.
+
+        The simulated runner has nothing to sample, so it appends on the decode step
+        instead (:meth:`on_decode`) and keeps the cursor and the sequence in lockstep.
+        """
+        self.generated_tokens.append(token)
+        if self.first_token_time is None:
+            self.first_token_time = now
+
     def on_preempted(self) -> None:
         """KV blocks were reclaimed: rewind the cursor so the sequence is recomputed.
 

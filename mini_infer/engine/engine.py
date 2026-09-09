@@ -135,11 +135,20 @@ class Engine:
         self.metrics: MetricsCollector = metrics if metrics is not None else MetricsCollector()
         self.metrics.attach(self)
         self.max_stalled_steps = max_stalled_steps
+        #: True when the runner attends over the physical KV blocks. That decides both
+        #: when the engine commits allocations and how it books sampled tokens.
+        self.attends_over_kv: bool = bool(getattr(self.runner, "attends_over_kv", False))
         self.scheduler: Scheduler = (
             scheduler
             if scheduler is not None
-            else _build_default_scheduler(self.config, memory=self.memory)
+            else _build_default_scheduler(
+                self.config, memory=self.memory, pending_decode_token=self.attends_over_kv
+            )
         )
+        # The runner is the authority on the token convention: it is the thing that
+        # either has logits to sample from or does not. Keep the scheduler in step.
+        if hasattr(self.scheduler, "pending_decode_token"):
+            self.scheduler.pending_decode_token = self.attends_over_kv
 
         self.requests: dict[str, Request] = {}
         self.waiting: list[Request] = []
@@ -245,6 +254,16 @@ class Engine:
             work.request_id: work.request.num_computed_tokens + work.num_new_tokens
             for work in output.work
         }
+
+        # A runner that attends over the KV blocks cannot compute without them, so its
+        # allocations are committed first. The plan was funded by the victims it chose,
+        # so those are released before the allocation. The commit order below is the
+        # speculative one, for runners that only report a duration.
+        preemptions: list[StepEvent] = []
+        if self.attends_over_kv:
+            preemptions = self._release_preempted_kv(output.preemptions)
+            self._allocate_kv_for_work(output)
+
         timing = self.runner.time_step(output, context_lengths=context_lengths)
         sampled = self.runner.execute(output, context_lengths=context_lengths)
 
@@ -252,12 +271,18 @@ class Engine:
         end = self.clock.now()
 
         events = self._apply(output, sampled.sampled_tokens, end)
-        # Commit order: free the victims' KV and rewind them, release anyone who
-        # finished, then allocate for the work that ran. The scheduler planned all
-        # of this without touching memory, so this is the only place state moves.
-        events.extend(self._release_preempted_kv(output.preemptions))
+        # Commit order for a simulated runner: free the victims' KV and rewind them,
+        # release anyone who finished, then allocate for the work that ran. The
+        # scheduler planned all of this without touching memory, so this is the only
+        # place state moves.
+        events.extend(
+            preemptions
+            if self.attends_over_kv
+            else self._release_preempted_kv(output.preemptions)
+        )
         self._release_finished_kv()
-        self._allocate_kv(output)
+        if not self.attends_over_kv:
+            self._allocate_kv(output)
 
         step = EngineStep(
             index=self._step_index,
@@ -328,6 +353,9 @@ class Engine:
         sampled_tokens: dict[str, int],
         now: float,
     ) -> list[StepEvent]:
+        if self.attends_over_kv:
+            return self._apply_sampled(output, sampled_tokens, now)
+
         events: list[StepEvent] = []
         finished: list[Request] = []
 
@@ -364,6 +392,74 @@ class Engine:
 
             request.on_decode(sampled_tokens.get(request.id, 0), now)
             events.append(StepEvent(StepEventKind.DECODED, request.id, 1))
+            if request.is_complete:
+                request.mark_complete()
+
+            if request.is_finished and request.id not in self._recorded_finished:
+                request.on_finished(now)
+                finished.append(request)
+                events.append(
+                    StepEvent(
+                        StepEventKind.FINISHED, request.id, detail="max_new_tokens reached"
+                    )
+                )
+
+        for request in finished:
+            self.running.pop(request.id, None)
+            self._recorded_finished.add(request.id)
+            self.finished.append(request)
+
+        if finished:
+            finished_ids = {r.id for r in finished}
+            self.waiting = [r for r in self.waiting if r.id not in finished_ids]
+
+        return events
+
+    def _apply_sampled(
+        self,
+        output: SchedulerOutput,
+        sampled_tokens: dict[str, int],
+        now: float,
+    ) -> list[StepEvent]:
+        """Commit a step from a runner whose logits produced the tokens.
+
+        The cursor advances over the positions the runner was granted, exactly as in
+        :meth:`_apply`. The difference is where the token comes from: a real forward
+        samples the *next* token while computing those positions, so the token is
+        appended behind the cursor and its own position stays pending for the next
+        step. The first token therefore lands at the end of prefill — which is when a
+        server really has something to stream, and so where time-to-first-token should
+        be measured.
+        """
+        events: list[StepEvent] = []
+        finished: list[Request] = []
+
+        for work in output.work:
+            request = work.request
+
+            if request.status is RequestStatus.WAITING:
+                request.on_admitted(self._step_index)
+                events.append(StepEvent(StepEventKind.ADMITTED, request.id))
+
+            if work.num_new_tokens <= 0:
+                # Zero tokens claims a slot without executing: the KV pool could not
+                # fund this work in this step.
+                continue
+
+            request.on_prefill(work.num_new_tokens)
+            if work.kind is ScheduledKind.PREFILL:
+                events.append(
+                    StepEvent(StepEventKind.PREFILLED, request.id, work.num_new_tokens)
+                )
+
+            # The forward covered the whole sequence, so its last row is the next
+            # token for this request.
+            if request.num_computed_tokens == request.num_tokens and not request.is_complete:
+                token = sampled_tokens.get(request.id)
+                if token is not None:
+                    request.on_sampled(token, now)
+                    events.append(StepEvent(StepEventKind.DECODED, request.id, 1))
+
             if request.is_complete:
                 request.mark_complete()
 
@@ -472,9 +568,37 @@ class Engine:
             # precisely those blocks.
             self.memory.grow_to(request, request.num_computed_tokens)
 
+    def _allocate_kv_for_work(self, output: SchedulerOutput) -> None:
+        """Commit the blocks for work that has not run yet.
+
+        Used only when the runner attends over the KV blocks: it writes into the
+        positions it was granted, so those blocks must exist before it executes. The
+        target is the cursor *after* the grant, which is what the runner will fill in;
+        by the time the step is applied the cursor has caught up, so the pool's
+        invariants hold again.
+        """
+        if self.memory is None:
+            return
+        for work in output.work:
+            if work.num_new_tokens <= 0:
+                continue
+            request = work.request
+            # Anything still holding work here is about to compute, including a
+            # preempted request being recomputed: it is not active yet, but it is
+            # about to be, and it needs blocks to hold the KV it will write.
+            if request.status is RequestStatus.FINISHED:  # pragma: no cover - defensive
+                continue
+            self.memory.grow_to(request, request.num_computed_tokens + work.num_new_tokens)
+
+
 def _build_default_scheduler(
-    config: EngineConfig, *, memory: PagedBlockManager | None
+    config: EngineConfig,
+    *,
+    memory: PagedBlockManager | None,
+    pending_decode_token: bool = False,
 ) -> Scheduler:
     from mini_infer.engine.policies import build_policy
 
-    return build_policy(config.policy, config, memory=memory)
+    return build_policy(
+        config.policy, config, memory=memory, pending_decode_token=pending_decode_token
+    )
