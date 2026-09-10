@@ -3,7 +3,7 @@
 How to run, observe, poke at, and explain what's been built. Everything here is
 tested; every number shown is from an actual run on this machine.
 
-**Status:** 8 of 8 phases done, 139 checks passing, 14 commits.
+**Status:** 8 of 8 phases done, 139 checks passing, 13 commits.
 
 ```
 mini_infer/engine/      request model, scheduling contract, policies, engine loop
@@ -816,6 +816,8 @@ python -m mini_infer.cli --sweep num_blocks --values 16,32,64,128 --export /tmp/
 Git history, one subsystem per commit:
 
 ```
+bfe6a06  a real model runner attending over the engine's physical KV blocks
+c5e6fdd  record the phase 7 commits in the guide's history
 ed1aa5f  make the tree pass the ruff configuration it already declares
 cbf5a22  generated figures, and the README write-up they support
 cb5a74d  scheduling policies, fairness knobs and a policy comparison
