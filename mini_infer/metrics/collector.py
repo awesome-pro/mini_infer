@@ -64,6 +64,7 @@ class RequestMetrics:
     first_step: int | None = None
     first_step_time: float | None = None
     num_preemptions: int = 0
+    cached_prefix_tokens: int = 0
     #: Wall time of every streamed token, which is what makes an ITL distribution
     #: possible instead of only an average.
     token_times: list[float] = field(default_factory=list)
@@ -151,6 +152,9 @@ class MetricsCollector:
     def __init__(self) -> None:
         self.requests: dict[str, RequestMetrics] = {}
         self.steps: list[StepMetrics] = []
+        #: Prefix-cache reuse: how many requests inherited KV, and how many tokens.
+        self.prefix_cache_hits = 0
+        self.cached_prefix_tokens = 0
         self._engine: Engine | None = None
 
     # ------------------------------------------------------------- attachment
@@ -188,6 +192,10 @@ class MetricsCollector:
                     metrics.first_token_time = step.end_time
             elif event.kind is StepEventKind.PREEMPTED:
                 metrics.num_preemptions += 1
+            elif event.kind is StepEventKind.PREFIX_CACHED:
+                self.prefix_cache_hits += 1
+                self.cached_prefix_tokens += event.num_tokens
+                metrics.cached_prefix_tokens += event.num_tokens
             elif event.kind is StepEventKind.FINISHED:
                 metrics.finish_time = step.end_time
 
@@ -287,6 +295,8 @@ class RunMetrics:
     mean_kv_utilization: float
     mean_internal_fragmentation: float
     max_internal_fragmentation: float
+    prefix_cache_hits: int
+    cached_prefix_tokens: int
 
     mean_prefill_tokens_per_step: float
     max_prefill_tokens_per_step: int
@@ -351,6 +361,8 @@ class RunMetrics:
             mean_kv_utilization=_mean(kv),
             mean_internal_fragmentation=_mean(fragmentation),
             max_internal_fragmentation=max(fragmentation) if fragmentation else 0.0,
+            prefix_cache_hits=collector.prefix_cache_hits,
+            cached_prefix_tokens=collector.cached_prefix_tokens,
             mean_prefill_tokens_per_step=_mean(prefill_per_step),
             max_prefill_tokens_per_step=max(prefill_per_step) if prefill_per_step else 0,
             mean_decode_batch=_mean(decode_per_step),
@@ -388,6 +400,8 @@ class RunMetrics:
             "mean_kv_utilization": round(self.mean_kv_utilization, 4),
             "mean_fragmentation": round(self.mean_internal_fragmentation, 4),
             "max_fragmentation": round(self.max_internal_fragmentation, 4),
+            "prefix_cache_hits": self.prefix_cache_hits,
+            "cached_prefix_tokens": self.cached_prefix_tokens,
             "mean_prefill_tokens": round(self.mean_prefill_tokens_per_step, 2),
             "max_prefill_tokens": self.max_prefill_tokens_per_step,
             "mean_decode_batch": round(self.mean_decode_batch, 2),

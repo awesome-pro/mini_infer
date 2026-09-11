@@ -708,6 +708,103 @@ def _worst_wait(policy: str, **knobs) -> int:
     return max(waits) if waits else 0
 
 
+def figure_prefix_cache(out: Path) -> None:
+    """Prefix caching: the same shared prefix, with and without reuse."""
+    print("\n=== prefix caching: a shared prefix across arrival rates ===")
+    rates = [2, 4, 8, 16, 32]
+    prefix = 480
+    off_rows, on_rows = [], []
+    for rate in rates:
+        for enabled, sink in ((False, off_rows), (True, on_rows)):
+            workload = shared_prefix_workload(120, prefix=prefix, rate=float(rate))
+            config = EngineConfig(
+                max_batch_tokens=64,
+                max_running_requests=4,
+                num_blocks=256,
+                enable_prefix_cache=enabled,
+            )
+            engine = Engine(config)
+            result = Driver(engine, workload).run()
+            metrics = result.metrics
+            sink.append(
+                {
+                    "label": f"{'on' if enabled else 'off'} {rate}/s",
+                    "rate": rate,
+                    "prefill_tokens": sum(step.num_prefill_tokens for step in engine.history),
+                    "reused": metrics.cached_prefix_tokens,
+                    "hits": metrics.prefix_cache_hits,
+                    "output_tok_per_s": metrics.output_throughput,
+                    "mean_ttft_ms": metrics.mean_ttft * 1e3,
+                    "p95_ttft_ms": metrics.p95_ttft * 1e3,
+                    "mean_e2e_ms": metrics.mean_e2e * 1e3,
+                }
+            )
+    echo(
+        off_rows + on_rows,
+        [
+            "label",
+            "prefill_tokens",
+            "reused",
+            "hits",
+            "output_tok_per_s",
+            "mean_ttft_ms",
+            "mean_e2e_ms",
+        ],
+        "prefix cache sweep",
+    )
+
+    plot_lines(
+        rates,
+        [
+            Panel(
+                "prefill tokens computed",
+                "tokens",
+                {
+                    "without cache": series_from_rows(off_rows, "prefill_tokens"),
+                    "with cache": series_from_rows(on_rows, "prefill_tokens"),
+                },
+            ),
+            Panel(
+                "time to first token",
+                "ms",
+                {
+                    "without cache": series_from_rows(off_rows, "mean_ttft_ms"),
+                    "with cache": series_from_rows(on_rows, "mean_ttft_ms"),
+                },
+            ),
+            Panel(
+                "end-to-end latency",
+                "ms",
+                {
+                    "without cache": series_from_rows(off_rows, "mean_e2e_ms"),
+                    "with cache": series_from_rows(on_rows, "mean_e2e_ms"),
+                },
+            ),
+        ],
+        out / "prefix_cache.png",
+        xlabel="offered load (requests/s)",
+        title=f"prefix caching: a {prefix}-token prefix shared by every request",
+        log_x=True,
+    )
+
+
+def shared_prefix_workload(num_requests: int, *, prefix: int, rate: float) -> WorkloadSpec:
+    """Every request starts with the same prefix and ends with its own tail."""
+    workload = spec(
+        num_requests,
+        Constant(prefix + 8),
+        Constant(32),
+        arrival="poisson",
+        rate=rate,
+        seed=0,
+    ).build()
+    shared = list(range(1, prefix + 1))
+    for index, request in enumerate(workload.requests):
+        tail = [10_000 + index * 8 + offset for offset in range(8)]
+        request.prompt_tokens = shared + tail
+    return workload
+
+
 EXPERIMENTS = {
     "timeline": figure_timeline,
     "latency": figure_latency_distributions,
@@ -719,6 +816,7 @@ EXPERIMENTS = {
     "chunking": figure_chunking,
     "static": figure_static_vs_continuous,
     "policies": figure_policies,
+    "prefix_cache": figure_prefix_cache,
 }
 
 

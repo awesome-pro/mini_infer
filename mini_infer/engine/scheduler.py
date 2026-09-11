@@ -64,6 +64,9 @@ class SchedulerOutput:
     #: Extra physical blocks each scheduled request needs for this step's work,
     #: computed while planning. The engine commits exactly this.
     allocations: dict[str, int] = field(default_factory=dict)
+    #: Cached prefix blocks to share into the scheduled requests before they run, keyed
+    #: by request. Planning decided these; the engine refcounts them.
+    attachments: dict[str, tuple[int, ...]] = field(default_factory=dict)
 
     @property
     def num_preemptions(self) -> int:
@@ -72,6 +75,10 @@ class SchedulerOutput:
     @property
     def num_blocks_allocated(self) -> int:
         return sum(self.allocations.values())
+
+    @property
+    def num_blocks_attached(self) -> int:
+        return sum(len(blocks) for blocks in self.attachments.values())
 
     @property
     def num_scheduled_tokens(self) -> int:

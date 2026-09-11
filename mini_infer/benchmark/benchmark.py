@@ -124,6 +124,7 @@ class Report:
         "mean_queue_ms",
         "peak_kv_utilization",
         "mean_fragmentation",
+        "cached_prefix_tokens",
         "max_decode_batch",
         "preemptions",
     )
@@ -143,6 +144,7 @@ class Report:
         "mean_queue_ms": "queue mean",
         "peak_kv_utilization": "KV peak",
         "mean_fragmentation": "frag mean",
+        "cached_prefix_tokens": "prefix saved",
         "max_decode_batch": "decode batch",
         "preemptions": "evictions",
     }

@@ -55,6 +55,9 @@ class EngineConfig:
     policy: str = "fcfs"
     enable_chunked_prefill: bool = True
     enable_preemption: bool = True
+    #: Reuse KV for token prefixes another request already computed. Off by default so
+    #: results stay comparable with runs made before the cache existed.
+    enable_prefix_cache: bool = False
     max_wait_steps: int = 16
     prefill_reservation: int = 16
 

@@ -9,6 +9,9 @@ from enum import StrEnum
 from mini_infer.block_table import BlockTable
 
 _id_counter = itertools.count()
+#: Submission order, used wherever 'younger' has to mean something when two
+#: requests arrived at the same instant: a burst has no arrival-time order at all.
+_sequence_counter = itertools.count()
 
 
 class RequestStatus(StrEnum):
@@ -57,6 +60,10 @@ class Request:
 
     first_token_time: float | None = None
     finish_time: float | None = None
+
+    #: Monotonic submission order. Arrival times tie constantly — every burst request
+    #: arrives at the same instant — so age needs a tie-break that is not the id string.
+    sequence: int = field(default_factory=lambda: next(_sequence_counter))
 
     # Observability: engine step on which the request was last admitted.
     admitted_step: int | None = None

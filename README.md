@@ -5,7 +5,7 @@ management — built from scratch to study what a serving scheduler actually tra
 away.**
 
 ```text
-Python 3.12+   ·   zero runtime dependencies   ·   139 checks, no test framework
+Python 3.12+   ·   zero runtime dependencies   ·   155 checks, no test framework
 5 scheduling policies   ·   3 arrival processes   ·   13 figures, all generated from real runs
 ```
 
@@ -110,9 +110,10 @@ git clone <this repo> && cd mini_infer
 python -m venv .venv && source .venv/bin/activate
 pip install -e .                      # no runtime dependencies
 
-# 139 checks, no test framework: eight scripts of plain asserts
+# 155 checks, no test framework: nine scripts of plain asserts
 for f in check_engine check_memory check_preemption check_metrics check_benchmark \
-         check_policies check_visualizations check_torch_runner; do python scripts/$f.py; done
+         check_policies check_prefix_cache check_visualizations check_torch_runner; do
+  python scripts/$f.py; done
 
 # a real model through the scheduler, streaming tokens (needs the torch extra)
 pip install -e ".[torch]"
@@ -123,11 +124,14 @@ python examples/demo.py                # a scheduler timeline and KV occupancy
 python examples/kv_pressure.py         # preemption off vs on
 python examples/policy_comparison.py   # the five policies, head to head
 python examples/benchmark_demo.py      # saturation, KV sweeps, arrival models
+python examples/prefix_cache.py        # the same prefix computed once, not 120 times
 
 # benchmark anything from the CLI
 python -m mini_infer.cli --requests 200 --arrival poisson --rate 16
 python -m mini_infer.cli --sweep policy --values fcfs,prefill_first,balanced,static
 python -m mini_infer.cli --sweep max_batch_tokens --values 16,32,64,128 --export /tmp/r
+python -m mini_infer.cli --prefix-cache --requests 120 --rate 12
+python -m mini_infer.cli --sweep prefix_cache --values off,on --requests 120 --rate 12
 
 # regenerate every figure in this README
 pip install -e ".[plot]" && python scripts/make_figures.py
@@ -263,15 +267,15 @@ what says so.
 
 | KV pool | Throughput | p95 TTFT | Evictions | Finished |
 |---|---|---|---|---|
-| 8 blocks | 472.0 tok/s | 8,461.3 ms | 416 | 120/120 |
-| 16 blocks | 849.3 tok/s | 1,575.6 ms | 298 | 120/120 |
-| 32 blocks | 1,033.5 tok/s | 144.2 ms | 52 | 120/120 |
-| 64 blocks | 1,036.0 tok/s | 12.7 ms | 2 | 120/120 |
+| 8 blocks | 461.5 tok/s | 8,714.1 ms | 822 | 120/120 |
+| 16 blocks | 831.5 tok/s | 1,744.2 ms | 554 | 120/120 |
+| 32 blocks | 1,033.7 tok/s | 143.9 ms | 68 | 120/120 |
+| 64 blocks | 1,036.0 tok/s | 11.7 ms | 1 | 120/120 |
 | 128 blocks | 1,036.0 tok/s | 11.7 ms | 0 | 120/120 |
 
 **Below the working set, the pool sets the throughput ceiling.** An 8-block pool needs
-416 recomputations to finish the same work that a 64-block pool finishes with 2, and
-costs 8.5 seconds of p95 TTFT against 13 ms.
+822 recomputations to finish the same work that a 64-block pool finishes with 1, and
+costs 8.7 seconds of p95 TTFT against 12 ms.
 
 The important part is that **completion stays at 120/120 in every configuration**:
 recompute preemption converts memory pressure into work and latency rather than into
@@ -298,7 +302,7 @@ blocks unattractive.
 
 The figure also shows two ways to sweep block size. Holding the **pool** at 128 blocks
 varies capacity as well (1024 → 8192 tokens); holding **capacity** at 2048 tokens does
-not. At 8 tokens/block the difference is visible — the pool sweep gets 827 tok/s against
+not. At 8 tokens/block the difference is visible — the pool sweep gets 826 tok/s against
 845 — and at 16+ both are above the working set and identical. **A block-size sweep that
 fixes the block count is also a capacity sweep**, which is easy to miss.
 
@@ -385,6 +389,51 @@ it the right workload for comparing *scheduler behaviour*, while burst measures 
 and Poisson models an open-loop service. Reporting one number without naming the arrival
 model is not reporting a result.
 
+### 11. Prefix caching: KV computed once, reused by everyone
+
+![prefix caching](figures/prefix_cache.png)
+
+120 requests, each a 480-token shared prefix followed by its own 8-token tail, Poisson
+arrivals, 256 blocks, a 64-token budget:
+
+| Offered load | Prefill tokens (off → on) | Mean TTFT (off → on) | Mean E2E (off → on) | Throughput (off → on) |
+|---|---|---|---|---|
+| 2 req/s | 58,560 → **1,440** | 64.3 → **7.3 ms** | 199.6 → 134.9 ms | 65.8 → 65.9 tok/s |
+| 4 req/s | 58,560 → **1,472** | 68.4 → **8.3 ms** | 227.9 → 150.8 ms | 131.2 → 131.5 tok/s |
+| 8 req/s | 58,560 → **1,472** | 110.0 → **34.5 ms** | 320.5 → 230.1 ms | 261.0 → 261.9 tok/s |
+| 16 req/s | 58,560 → **1,472** | 1,319.6 → 1,104.1 ms | 1,572.4 → 1,398.5 ms | 389.1 → **403.3 tok/s** |
+| 32 req/s | 58,560 → **1,472** | 3,084.8 → 2,859.6 ms | 3,339.1 → 3,156.2 ms | 389.4 → **404.4 tok/s** |
+
+**The prefix is computed once instead of 120 times: 97% of all prefill work disappears**,
+and 119 of 120 requests inherit KV someone else already computed. Mean TTFT falls 89% at
+2 req/s, and throughput *rises* slightly because the freed compute goes to decoding.
+
+The benefit is largest where the engine is not yet saturated, and shrinks as queueing
+takes over — at 32 req/s the queue, not the prefill, is what the request is waiting for.
+That is worth saying plainly: a cache is a compute optimisation, and compute is not what
+you are short of once you are saturated.
+
+Two design points make it safe rather than merely fast.
+
+**Only full blocks are cached, and a hit lands on a block boundary.** A cached block is
+therefore immutable, and the block a request writes next is always one it owns outright —
+no copy-on-write, no shared block ever written. Contents are hashed *with the hash of the
+block before them*, so a block only matches at the same absolute positions; rotary
+positions are baked into the KV, so matching on content alone would be wrong.
+
+**A hit is planned, not bolted on.** The scheduler shrinks the request's remaining work
+and block requirement and asks the pool whether the rest of the sequence fits *before*
+sharing anything, then the engine commits the attachment before it allocates. Planning it
+this way is what stops the failure mode the first implementation had: a request that a
+cached prefix makes cheap to evict gets evicted, re-admitted and evicted again, forever.
+Under real pressure a request simply waits its turn and takes the prefix later.
+
+Two limits worth knowing, both measured above: requests that arrive *together* cannot
+share, because nothing has been computed yet when the second one is scheduled — staggered
+arrivals are what make a shared prefix pay; and cached blocks still occupy the pool, they
+are just evictable, so the cache competes with live requests for capacity like anything
+else.
+
 ---
 
 ## How the scheduler works
@@ -404,6 +453,12 @@ zero and its block table is cleared) but **keeps every token it generated**. It 
 re-admitted later and recomputes its prompt. Victims are chosen youngest-first (LIFO),
 and only an older request may evict a younger one, which stops two requests from handing
 the pool back and forth.
+
+**Cached prefixes are an allocation decision.** A request whose sequence starts with
+tokens someone else already computed inherits those blocks instead of recomputing them.
+The scheduler plans the hit like any other claim — remaining work and block requirement
+both shrink, and the pool has to be able to fund the *rest* of the sequence before the
+share is taken — so admission control and preemption keep working unchanged.
 
 **Policies are one decision wide.** `fcfs`, `decode_first`, `prefill_first`, `balanced`
 and `static` share the budget accounting, the memory planning and the eviction rule;
@@ -523,7 +578,9 @@ Stated up front, because a runtime project is judged by what it knows it does no
 | The real runner is CPU-only and small-model | no batching kernel, no CUDA, no tensor parallelism |
 | Preemption recomputes; there is no swap path | recompute is cheaper to reason about; swap is future work |
 | `fcfs` and `decode_first` are the same schedule | tested and labelled a finding, not hidden |
-| No prefix caching | the best next feature: hash full prompt blocks and share them |
+| Only full blocks are cached | a partial tail block is the one a request is writing |
+| Requests arriving together cannot share | nothing is cached until the first one computes it |
+| Cached blocks still occupy the pool | they are evictable, but they compete for capacity |
 | No priority classes or deadlines | ageing is the only fairness mechanism |
 | A request that can never fit stalls the run | detected by `can_ever_fit()`; no rejection policy yet |
 | Python-only, single process | no tensor/pipeline parallelism, on purpose |
@@ -539,9 +596,14 @@ python -m mini_infer.cli --requests 120 --arrival poisson --rate 16
 # every figure in this README, from a fixed seed
 python scripts/make_figures.py                 # writes figures/*.png
 
-# the full check suite (139 checks)
+# the full check suite (155 checks)
 for f in check_engine check_memory check_preemption check_metrics check_benchmark \
-         check_policies check_visualizations check_torch_runner; do python scripts/$f.py; done
+         check_policies check_prefix_cache check_visualizations check_torch_runner; do
+  python scripts/$f.py; done
+
+# prefix caching, with and without
+python examples/prefix_cache.py --requests 120 --rate 12
+python -m mini_infer.cli --sweep prefix_cache --values off,on --requests 120 --rate 12
 
 # the real runner: paged attention, verified against HuggingFace
 python examples/real_model.py --concurrency 3
@@ -559,7 +621,7 @@ mini_infer/
   benchmark/    arrival processes, workload generation, driver, sweeps, exports
   visualizations/  text timelines and charts, plus the matplotlib figures
 scripts/        check_*.py (plain asserts) and make_figures.py
-examples/       six runnable demos, each showing one idea
+examples/       seven runnable demos, each showing one idea
 figures/        generated by scripts/make_figures.py, committed for the README
 ```
 
@@ -569,13 +631,15 @@ figures/        generated by scripts/make_figures.py, committed for the README
 
 ## Where this goes next
 
-1. **Prefix caching**: hash full prompt blocks and share them between requests with a
-   common prefix — the highest-value feature still missing, and now a real one, because the
-   blocks hold real tensors.
+1. **Sharing across *concurrent* arrivals**: a request can only inherit a prefix that is
+   already computed, so a burst of identical prompts still computes it several times. A
+   "compute once, wait for it" admission rule would fix that.
 2. **Swap-based preemption**: copy a victim's blocks to host memory instead of recomputing,
-   and measure which wins as a function of prompt length.
+   and measure which wins as a function of prompt length — and now also whether it beats
+   recomputing when the prompt is still in the cache.
 3. **A fused paged-attention kernel**: the gather is the price of correctness; a kernel that
-   reads blocks in place is the price of speed.
+   reads blocks in place is the price of speed. Prefix caching makes the gather read the
+   same blocks for many requests, which is exactly what a kernel could exploit.
 
 ---
 

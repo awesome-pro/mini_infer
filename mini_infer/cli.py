@@ -44,12 +44,13 @@ SWEEPS: dict[str, str] = {
     "max_running_requests": "concurrent request limit",
     "max_prefill_chunk": "largest prefill chunk",
     "max_wait_steps": "balanced: ageing bound in steps",
+    "prefix_cache": "off or on",
     "prefill_reservation": "balanced: tokens per step reserved for prefill",
     "arrival": "burst, poisson or closed_loop",
 }
 
 #: Sweep axes whose values are names rather than numbers.
-STRING_AXES = ("policy", "arrival")
+STRING_AXES = ("policy", "arrival", "prefix_cache")
 
 
 def parse_values(raw: str, axis: str) -> list:
@@ -118,6 +119,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-prefill-chunk", type=int, default=None)
     parser.add_argument("--no-chunked-prefill", action="store_true")
     parser.add_argument("--no-preemption", action="store_true")
+    parser.add_argument(
+        "--prefix-cache",
+        action="store_true",
+        help="reuse KV for token prefixes another request already computed",
+    )
 
     parser.add_argument("--sweep", choices=sorted(SWEEPS), help="axis to vary")
     parser.add_argument("--values", help="comma-separated values for --sweep")
@@ -137,6 +143,7 @@ def config_from_args(args: argparse.Namespace) -> EngineConfig:
         max_prefill_chunk=args.max_prefill_chunk,
         enable_chunked_prefill=not args.no_chunked_prefill,
         enable_preemption=not args.no_preemption,
+        enable_prefix_cache=args.prefix_cache,
         max_wait_steps=args.max_wait_steps,
         prefill_reservation=args.prefill_reservation,
     )
@@ -156,12 +163,18 @@ def workload_from_args(args: argparse.Namespace, **overrides) -> WorkloadSpec:
     return WorkloadSpec(**settings)
 
 
+def _flag(value: object) -> bool:
+    return str(value).strip().lower() in ("on", "true", "yes", "1")
+
+
 def apply_sweep(
     config: EngineConfig, workload: WorkloadSpec, axis: str, value
 ) -> tuple[EngineConfig, WorkloadSpec]:
     """The (config, workload) pair for one point of a sweep."""
     if axis == "policy":
         return config.with_(policy=str(value)), workload
+    if axis == "prefix_cache":
+        return config.with_(enable_prefix_cache=_flag(value)), workload
     if axis == "rate":
         return config, replace(workload, rate=float(value))
     if axis == "arrival":
@@ -212,7 +225,8 @@ def main(argv: list[str] | None = None) -> int:
         f"max_running_requests={base_config.max_running_requests} "
         f"num_blocks={base_config.num_blocks} block_size={base_config.block_size} "
         f"chunked_prefill={base_config.enable_chunked_prefill} "
-        f"preemption={base_config.enable_preemption}"
+        f"preemption={base_config.enable_preemption} "
+        f"prefix_cache={base_config.enable_prefix_cache}"
     )
     if base_config.policy == "balanced":
         print(

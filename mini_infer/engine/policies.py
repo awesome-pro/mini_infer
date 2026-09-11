@@ -80,6 +80,12 @@ class SchedulerBase:
         self._requirements: dict[str, int] = {}
         #: Consecutive steps each request has spent waiting for its first chunk.
         self._wait_steps: dict[str, int] = {}
+        #: Cached prefixes this step's plan will share into requests, keyed by id.
+        self._hits: dict[str, tuple[int, tuple[int, ...]]] = {}
+        #: Each hit's blocks that the pool does not already have an owner for.
+        self._unowned: dict[str, tuple[int, ...]] = {}
+        #: Their union: the distinct blocks this step's attachments take from the pool.
+        self._reserved_ids: set[int] = set()
 
     # ------------------------------------------------------------- interfaces
 
@@ -94,6 +100,7 @@ class SchedulerBase:
     ) -> SchedulerOutput:
         self.memory = memory if memory is not None else self.memory
         self._track_waiting(waiting)
+        self._find_cached_prefixes(waiting, running)
         self._reset_step_state()
 
         work: list[ScheduledWork] = []
@@ -103,15 +110,120 @@ class SchedulerBase:
             # The plan now knows which blocks those evictions free, so re-planning
             # uses them. Nothing has been committed yet: the engine applies the
             # frees and the allocation together, after the runner has succeeded.
+            # A victim's cached-prefix reservation goes with it: it will not be
+            # attached this step, so it must not hold capacity the requester needs.
+            for victim_id in preemptions:
+                self._hits.pop(victim_id, None)
+                self._unowned.pop(victim_id, None)
+            self._reserved_ids = {
+                block for blocks in self._unowned.values() for block in blocks
+            }
+            # Read the victims *before* resetting: the fresh plan has to inherit the
+            # blocks the eviction frees, or the request that needed them is left
+            # unfunded in the very step that freed them.
+            victims = self.plan.victims()
             self._reset_step_state()
-            self.plan = BlockPlan(self.memory, victims=self.plan.victims())
+            self.plan = BlockPlan(
+                self.memory, victims=victims, reserved=self.reserved_blocks
+            )
             work = []
             self._build_plan(work, waiting, running, budget)
 
+        scheduled = {item.request_id for item in work}
         return SchedulerOutput(
             work=tuple(work),
             preemptions=preemptions,
             allocations=self.plan.claims() if self.plan is not None else {},
+            attachments={
+                request_id: blocks
+                for request_id, (_, blocks) in self._hits.items()
+                if request_id in scheduled
+            },
+        )
+
+    def _find_cached_prefixes(
+        self, waiting: Sequence[Request], running: Sequence[Request]
+    ) -> None:
+        """Ask the pool which requests could start from KV someone else computed.
+
+        A hit is planned exactly like an allocation, not bolted on afterwards: the
+        request's remaining work and block requirement both shrink, the pool's free
+        capacity accounts for the shared blocks, and admission control decides whether
+        the request runs at all. That is what keeps a cache hit from starving a request
+        that is already mid-flight.
+        """
+        self._hits = {}
+        self._unowned = {}
+        self._reserved_ids = set()
+        if self.memory is None or not self.config.enable_prefix_cache:
+            return
+        for request in (*running, *waiting):
+            if request.is_finished or request.num_uncomputed_tokens <= 0:
+                continue
+            position, blocks = self.memory.cached_prefix(request)
+            if not blocks:
+                continue
+            self._hits[request.id] = (position, blocks)
+            # Only blocks nobody holds come out of the pool. A block already shared with
+            # another request, in this step or an earlier one, costs nothing.
+            unowned = tuple(
+                block for block in blocks if not self.memory.owners_of(block)
+            )
+            if unowned:
+                self._unowned[request.id] = unowned
+                self._reserved_ids.update(unowned)
+
+    @property
+    def reserved_blocks(self) -> int:
+        """Distinct blocks this step's attachments will take from the free pool."""
+        return len(self._reserved_ids)
+
+    def _cursor(self, request: Request) -> int:
+        """Where this request's compute starts: past any cached prefix it will share."""
+        hit = self._hits.get(request.id)
+        return request.num_computed_tokens if hit is None else hit[0]
+
+    def _extra_held(self, request: Request) -> int:
+        """Blocks the request will hold beyond its table once the plan is committed."""
+        hit = self._hits.get(request.id)
+        return 0 if hit is None else len(hit[1])
+
+    def _unowned_of(self, request: Request) -> int:
+        return len(self._unowned.get(request.id, ()))
+
+    def _hit_is_affordable(self, request: Request) -> bool:
+        """Whether the pool could fund the rest of a sequence this hit would start.
+
+        A cached prefix makes a request both cheap to start and cheap to evict, and a
+        request that is cheap to evict is one the scheduler will keep evicting: attach,
+        lose the blocks to whoever needed them, attach again. Requiring the whole
+        remainder to fit before taking the hit stops that cycle. Under real pressure the
+        request simply waits its turn like any other waiter, and takes the prefix later
+        when the memory is there.
+        """
+        if self.plan is None or self._extra_held(request) <= 0:
+            return True
+        remaining = (
+            self.plan.manager.blocks_needed_to_reach(request, request.num_tokens)
+            - request.block_table.num_blocks
+            - self._extra_held(request)
+        )
+        # free_blocks already subtracts this request's reservation, so add it back:
+        # what matters is what this request itself could hold.
+        available = self.plan.free_blocks(request.id) + self._unowned_of(request)
+        return remaining <= available
+
+    def _cache_ready(self, request: Request) -> bool:
+        """True when a cached prefix covers everything this request has left to prefill.
+
+        Its prompt — and any output it generated before being evicted — is already in the
+        pool, so the next thing it needs is a decode slot, not a prefill chunk.
+        """
+        if request.status.is_active or request.is_finished:
+            return False
+        return (
+            request.num_uncomputed_tokens > 0
+            and request.num_tokens - self._cursor(request) <= 0
         )
 
     def _is_decode_work(self, request: Request) -> bool:
@@ -128,7 +240,11 @@ class SchedulerBase:
         return request.num_uncomputed_tokens <= pending
 
     def _reset_step_state(self) -> None:
-        self.plan = BlockPlan(self.memory) if self.memory is not None else None
+        self.plan = (
+            BlockPlan(self.memory, reserved=self.reserved_blocks)
+            if self.memory is not None
+            else None
+        )
         self._requirements = {}
 
     def _track_waiting(self, waiting: Sequence[Request]) -> None:
@@ -159,7 +275,7 @@ class SchedulerBase:
         remaining = budget
         for phase in self.phase_order:
             if phase == "decode":
-                remaining -= self._schedule_decode(work, running, remaining)
+                remaining -= self._schedule_decode(work, running, remaining, waiting)
             else:
                 remaining -= self._schedule_prefill(work, waiting, running, remaining)
 
@@ -170,21 +286,39 @@ class SchedulerBase:
         work: list[ScheduledWork],
         running: Sequence[Request],
         budget: int,
+        waiting: Sequence[Request] = (),
     ) -> int:
         """Plan one token per decoding request, as far as memory allows.
 
         A request that cannot be funded keeps its slot with a zero-token grant, and
         its block requirement is recorded for the eviction pass.
+
+        Waiting requests are candidates too, but only those a cached prefix has made
+        ready to decode: they have nothing left to prefill and are not active yet, so
+        this is where they get their slot — and with it their shared blocks.
         """
         plan = self.plan
         used = 0
+        active = sum(1 for request in running if request.status.is_active)
 
-        for request in sorted(running, key=self.decode_order_key):
+        for request in sorted(list(running) + list(waiting), key=self.decode_order_key):
             if len(work) >= self.config.max_running_requests:
                 break
             if not self._is_decode_work(request):
-                # A request still mid-prompt (or recomputing generated positions) is
-                # served by the prefill phase.
+                ready = (
+                    active < self.config.max_running_requests
+                    and self._cache_ready(request)
+                    and self._hit_is_affordable(request)
+                )
+                if ready:
+                    work.append(
+                        ScheduledWork(request=request, num_new_tokens=0, kind=ScheduledKind.DECODE)
+                    )
+                    active += 1
+                else:
+                    # A request still mid-prompt (or recomputing generated positions) is
+                    # served by the prefill phase.
+                    pass
                 continue
             if request.is_finished or (plan is not None and plan.is_evicted(request.id)):
                 continue
@@ -230,7 +364,7 @@ class SchedulerBase:
         occupied = len(active)
 
         for request in sorted(candidates, key=self.prefill_order_key):
-            if request.num_uncomputed_tokens == 0 or (
+            if request.num_tokens - self._cursor(request) <= 0 or (
                 self.plan is not None and self.plan.is_evicted(request.id)
             ):
                 continue
@@ -240,6 +374,8 @@ class SchedulerBase:
                 continue
             new_admission = request.id not in active
             if new_admission and occupied >= self.config.max_running_requests:
+                continue
+            if not self._hit_is_affordable(request):
                 continue
 
             chunk = self._chunk_size(request, budget - used)
@@ -259,10 +395,11 @@ class SchedulerBase:
             )
             used += chunk
             if self.plan is not None:
-                target = request.num_computed_tokens + chunk
+                target = self._cursor(request) + chunk
                 needed = self.plan.manager.blocks_needed_to_reach(request, target)
                 self.plan.claim(
-                    request.id, max(0, needed - request.block_table.num_blocks)
+                    request.id,
+                    max(0, needed - request.block_table.num_blocks - self._extra_held(request)),
                 )
         return used
 
@@ -304,6 +441,9 @@ class SchedulerBase:
                     break
                 if not self._can_preempt(victim, requester):
                     continue
+                # The victim's *committed* blocks come back, not the ones a cached
+                # prefix might have added: an evicted request is dropped from the plan,
+                # so its attach never happens.
                 freed = blocks_for_tokens(
                     victim.num_computed_tokens, self.plan.block_size
                 )
@@ -349,8 +489,14 @@ class SchedulerBase:
         return self.preemption_key(victim) < self.preemption_key(requester)
 
     def preemption_key(self, request: Request) -> tuple:
-        """Sort key for victims: latest arrival first, so the youngest goes."""
-        return (-request.arrival_time, request.id)
+        """Sort key for victims: latest arrival first, so the youngest goes.
+
+        Ties break on submission order rather than on the request id. Burst workloads
+        give every request the same arrival time, and an id is arbitrary text: ordering
+        by it would evict the oldest request first, which is the opposite of the rule
+        this key exists to express.
+        """
+        return (-request.arrival_time, -request.sequence)
 
     # ------------------------------------------------------------------ hooks
 
@@ -359,18 +505,19 @@ class SchedulerBase:
 
         A simulated runner keeps the cursor and the sequence in lockstep, so the
         position it computes is ``num_tokens``; a runner with real logits keeps one
-        token pending, so it is ``num_computed_tokens``. Both are ``cursor + 1``.
+        token pending, so it is ``num_computed_tokens``. Both are ``cursor + 1``, where
+        the cursor counts any cached prefix the plan is about to share in.
         """
         assert self.plan is not None
-        needed = self.plan.manager.blocks_needed_to_reach(request, request.context_at_step(1))
-        return max(0, needed - request.block_table.num_blocks)
+        target = self._cursor(request) + 1
+        needed = self.plan.manager.blocks_needed_to_reach(request, target)
+        return max(0, needed - request.block_table.num_blocks - self._extra_held(request))
 
     def _blocks_for_prefill(self, request: Request) -> int:
-        """Blocks the request needs to prefill its whole remaining prompt."""
+        """Blocks the request needs to prefill its whole remaining sequence."""
         assert self.plan is not None
-        target = request.num_tokens
-        needed = self.plan.manager.blocks_needed_to_reach(request, target)
-        return max(0, needed - request.block_table.num_blocks)
+        needed = self.plan.manager.blocks_needed_to_reach(request, request.num_tokens)
+        return max(0, needed - request.block_table.num_blocks - self._extra_held(request))
 
     def _require(self, request_id: str, blocks: int) -> None:
         self._requirements[request_id] = max(
@@ -379,12 +526,18 @@ class SchedulerBase:
 
     def _chunk_size(self, request: Request, remaining_budget: int) -> int:
         """Prefill tokens to grant, clamped by the chunk cap, budget and KV pool."""
-        cap = min(request.num_uncomputed_tokens, self._chunk_cap(), remaining_budget)
+        uncomputed = request.num_tokens - self._cursor(request)
+        cap = min(uncomputed, self._chunk_cap(), remaining_budget)
         if self.plan is None:
             return max(0, cap)
         # The cap passed down must be the policy's own limit, never a chunk already
         # trimmed by memory: trimming first would hide the memory constraint.
-        return self.plan.max_growth_tokens(request, cap)
+        return self.plan.max_growth_tokens(
+            request,
+            cap,
+            extra_held=self._extra_held(request),
+            cursor=self._cursor(request),
+        )
 
     def _chunk_cap(self) -> int:
         """Largest prefill chunk this policy will grant.
@@ -474,7 +627,7 @@ class BalancedPolicy(SchedulerBase):
         budget: int,
     ) -> None:
         reserve = self._reserve(waiting, running, budget)
-        used = self._schedule_decode(work, running, budget - reserve)
+        used = self._schedule_decode(work, running, budget - reserve, waiting)
         self._schedule_prefill(work, waiting, running, budget - used)
 
     def _reserve(

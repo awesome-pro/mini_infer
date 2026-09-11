@@ -302,6 +302,45 @@ def check_preemption_preserves_tokens() -> None:
     assert len(engine.finished) == 2
 
 
+def check_a_shared_prefix_generates_the_same_tokens() -> None:
+    """The sharpest test of prefix caching: a request that never computed its own prompt.
+
+    The second request reads another request's keys and values, gathered from the same
+    physical blocks. If the sharing were even slightly wrong — wrong block, wrong
+    position, wrong rotation — the logits would move and the greedy tokens would differ.
+    """
+    from mini_infer.runner.torch_runner import TorchModelRunner, engine_config_for_model
+
+    _, path = tiny_model()
+    want = greedy_reference(PROMPT_A, 4)
+
+    config = engine_config_for_model(
+        str(path), enable_prefix_cache=True, block_size=4, num_blocks=64, max_batch_tokens=64
+    )
+    runner = TorchModelRunner(config, model=str(path))
+    engine = Engine(config, runner=runner)
+
+    first = engine.submit(
+        Request(prompt_tokens=PROMPT_A, max_new_tokens=4, arrival_time=0.0, id="first")
+    )
+    engine.run_to_completion()
+    memory = engine.memory
+    assert memory is not None
+    assert memory.num_cached_blocks > 0, "the first request must leave its blocks cached"
+
+    later = engine.submit(
+        Request(prompt_tokens=PROMPT_A, max_new_tokens=4, arrival_time=0.0, id="later")
+    )
+    engine.run_to_completion()
+
+    metrics = engine.metrics.summary(elapsed=engine.clock.now())
+    assert metrics.cached_prefix_tokens > 0, "the second request must actually reuse KV"
+    assert later.generated_tokens == want, (
+        f"shared KV changed the output: {later.generated_tokens} != {want}"
+    )
+    assert first.generated_tokens == want
+
+
 def check_kv_invariants_hold_through_a_real_run() -> None:
     config = engine_config(num_blocks=8, block_size=4, max_batch_tokens=8, max_running_requests=2)
     engine = Engine(config, runner=runner_for(config))
@@ -402,6 +441,10 @@ def main() -> int:
     check("chunked prefill matches one shot", check_chunked_prefill_matches_one_shot)
     check("batching does not change tokens", check_batching_does_not_change_tokens)
     check("preemption preserves tokens", check_preemption_preserves_tokens)
+    check(
+        "a shared prefix generates the same tokens",
+        check_a_shared_prefix_generates_the_same_tokens,
+    )
     check("KV invariants hold through a real run", check_kv_invariants_hold_through_a_real_run)
     check("one position pending while decoding", check_one_position_is_pending_while_decoding)
     check(

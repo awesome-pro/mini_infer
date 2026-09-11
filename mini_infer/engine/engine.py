@@ -28,6 +28,7 @@ class StepEventKind(StrEnum):
     PREFILLED = "prefilled"
     DECODED = "decoded"
     PREEMPTED = "preempted"
+    PREFIX_CACHED = "prefix_cached"
     FINISHED = "finished"
 
 
@@ -130,7 +131,11 @@ class Engine:
         self.memory: PagedBlockManager | None = (
             memory
             if memory is not None
-            else PagedBlockManager(self.config.num_blocks, self.config.block_size)
+            else PagedBlockManager(
+                self.config.num_blocks,
+                self.config.block_size,
+                enable_prefix_cache=self.config.enable_prefix_cache,
+            )
         )
         self.metrics: MetricsCollector = metrics if metrics is not None else MetricsCollector()
         self.metrics.attach(self)
@@ -250,6 +255,10 @@ class Engine:
             memory=self.memory,
         )
 
+        # Attachments come first: the runner reads the shared blocks, and the cursor
+        # has to cover them before anything measures a context length.
+        prefix_events = self._commit_prefix_attachments(output)
+
         context_lengths = {
             work.request_id: work.request.num_computed_tokens + work.num_new_tokens
             for work in output.work
@@ -270,7 +279,14 @@ class Engine:
         self.clock.advance(timing.duration_s)
         end = self.clock.now()
 
-        events = self._apply(output, sampled.sampled_tokens, end)
+        events = list(prefix_events)
+        events.extend(self._apply(output, sampled.sampled_tokens, end))
+        # The cursor now covers positions whose KV the runner produced, so their blocks
+        # are safe to share. A simulated runner reaches this through _allocate_kv; a real
+        # one allocates before running, so it needs this explicit point.
+        if self.memory is not None:
+            for work in output.work:
+                self.memory.cache_full_blocks(work.request)
         # Commit order for a simulated runner: free the victims' KV and rewind them,
         # release anyone who finished, then allocate for the work that ran. The
         # scheduler planned all of this without touching memory, so this is the only
@@ -346,6 +362,44 @@ class Engine:
         return list(self.run(arrivals, max_steps=max_steps))
 
     # ---------------------------------------------------------------- results
+
+    def _commit_prefix_attachments(self, output: SchedulerOutput) -> list[StepEvent]:
+        """Share the cached prefix blocks the plan decided each request should inherit.
+
+        The scheduler is the only thing that decides this, exactly as it decides
+        allocations: a hit shrinks the request's remaining work and its block
+        requirement, and admission control sees the shared blocks in the pool. The
+        engine's part is to refcount them and move the cursor past them, before the
+        runner — which needs them — and before any allocation, so a block the plan
+        promised to a request cannot be evicted out from under it in the same step.
+
+        Only the blocks themselves are shared, not a claim on them: a full cached block
+        is immutable, so two requests reading it cannot disturb each other.
+        """
+        memory = self.memory
+        if memory is None or not output.attachments:
+            return []
+
+        events: list[StepEvent] = []
+        for request_id, blocks in output.attachments.items():
+            request = self.requests.get(request_id)
+            if request is None:  # pragma: no cover - defensive
+                continue
+            position, _ = memory.cached_prefix(request)
+            held = request.num_computed_tokens
+            if position <= held:  # pragma: no cover - the pool changed under the plan
+                continue
+            memory.attach_prefix(request, blocks)
+            request.on_prefill(position - held)
+            events.append(
+                StepEvent(
+                    StepEventKind.PREFIX_CACHED,
+                    request_id,
+                    position - held,
+                    detail=f"shared {len(blocks)} blocks, skipped {position - held} tokens",
+                )
+            )
+        return events
 
     def _apply(
         self,
