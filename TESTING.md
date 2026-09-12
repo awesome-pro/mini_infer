@@ -4,7 +4,7 @@ How to run, observe, poke at, and explain what's been built. Everything here is
 tested; every number shown is from an actual run on this machine.
 
 **Status:** 8 of 8 phases done, plus the prefix-cache stretch feature. 155 checks
-passing, 13 commits.
+passing, 14 commits.
 
 ```
 mini_infer/engine/      request model, scheduling contract, policies, engine loop
@@ -838,6 +838,7 @@ python -m mini_infer.cli --sweep num_blocks --values 16,32,64,128 --export /tmp/
 Git history, one subsystem per commit:
 
 ```
+19a39f4  content-addressed prefix cache, and reuse across requests
 bfe6a06  a real model runner attending over the engine's physical KV blocks
 c5e6fdd  record the phase 7 commits in the guide's history
 ed1aa5f  make the tree pass the ruff configuration it already declares
