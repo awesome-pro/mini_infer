@@ -520,22 +520,48 @@ def plot_scatter(
     xlabel: str,
     ylabel: str,
     title: str = "",
+    caption: str = "",
 ) -> Path:
-    """A trade-off plane: one labelled point per configuration."""
+    """A trade-off plane: one labelled point per configuration.
+
+    Names go in a legend rather than next to the markers: at these coordinate
+    ranges several configurations land in the same corner, and inline text has
+    nowhere to go that is not on top of something.
+    """
     plt = _pyplot()
     if not points:
         raise ValueError("nothing to plot: no points")
 
-    fig, ax = plt.subplots(figsize=(6.0, 4.2))
+    fig, ax = plt.subplots(figsize=(6.0, 4.4))
     for index, point in enumerate(points):
-        ax.scatter(point.x, point.y, s=70, color=PALETTE[index % len(PALETTE)], zorder=3)
-        ax.annotate(
-            point.label,
-            xy=(point.x, point.y),
-            xytext=(6, 6),
-            textcoords="offset points",
-            fontsize=8,
+        ax.scatter(
+            point.x,
+            point.y,
+            s=70,
+            color=PALETTE[index % len(PALETTE)],
+            label=point.label,
+            zorder=3,
         )
-    ax.set_xlabel(xlabel)
+    for values, setter in (
+        ([point.x for point in points], ax.set_xlim),
+        ([point.y for point in points], ax.set_ylim),
+    ):
+        low, high = min(values), max(values)
+        pad = (high - low) * 0.18 if high > low else (abs(high) * 0.2 or 1.0)
+        setter(low - pad, high + pad)
+    ax.set_xlabel("")
     ax.set_ylabel(ylabel)
+    ax.grid(True, alpha=0.25, linewidth=0.6)
+    ax.set_axisbelow(True)
+    fig.subplots_adjust(left=0.13, right=0.97, top=0.88, bottom=0.24)
+    fig.supxlabel(xlabel, fontsize=9, y=0.16)
+    fig.legend(
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.055),
+        ncol=min(4, len(points)),
+        frameon=False,
+        fontsize=8,
+    )
+    if caption:
+        fig.text(0.5, 0.015, caption, ha="center", fontsize=8, style="italic")
     return _save(plt, fig, path, title=title)

@@ -606,9 +606,11 @@ def figure_policies(out: Path) -> None:
     plot_scatter(
         [Point(label, late_ttfts[label], stalls[label]) for label in served],
         out / "policy_tradeoff.png",
-        xlabel="time to first token for the late prompt (ms, lower is better)",
-        ylabel="delay to the existing decoders (ms, lower is better)",
-        title="decode priority is a trade, not a win",
+        xlabel="time to first token, late prompt (ms)",
+        ylabel="added delay, running decoders (ms)",
+        title="the cost of prefill priority",
+        caption="both axes: lower is better"
+        + (f"   ·   {', '.join(unserved)}: not served within 400 steps" if unserved else ""),
     )
 
     print("\n=== fairness: worst wait for a first token (40 requests, budget 8) ===")
