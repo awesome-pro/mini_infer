@@ -1,18 +1,19 @@
-# MiniServe: a miniature LLM inference runtime
+# MiniServe: an LLM serving runtime
 
-**Continuous batching, token-budget scheduling, chunked prefill and block-based KV
-management, built from scratch to study what a serving scheduler actually trades away.**
+**Continuous batching, token-budget scheduling, chunked prefill and block-based 
+KV+management, with a scheduler you can measure.**
 
 ```text
-Python 3.12+   ·   zero runtime dependencies   ·   155 checks, no test framework
-5 scheduling policies   ·   3 arrival processes   ·   14 figures, all generated from real runs
+Python 3.12+   ·   zero runtime dependencies
+155 checks, no test framework   ·   5 scheduling policies
+3 arrival processes   ·   14 figures, all generated from real runs
 ```
 
-The engine turns a stream of concurrent generation requests into a sequence of model
-forward passes. Every step it decides how many compute tokens each request gets and which
-physical KV blocks back them. It is a scheduler and memory-management project: model
-execution is a stated cost model, and the decisions, the memory and the measurements are
-where the behaviour shows up.
+The engine turns a stream of concurrent generation requests into a sequence of model forward
+passes. Every step it decides how many compute tokens each request gets and which physical KV
+blocks back them. It is a scheduler and memory-management project: model execution is a stated
+cost model, and the decisions, the memory and the measurements are where the behaviour shows
+up.
 
 ---
 
@@ -36,16 +37,14 @@ KV peak utilization:       29.7%           (mean 13.9%, 5.4% internal fragmentat
 Decode batch (mean/max):   3.5 / 4
 ```
 
-Queue time is 97% of TTFT. In a saturated serving system most of the latency is admission
-delay, not generation, which is why these experiments move the scheduler rather than the
-kernel.
+Queue time is 97% of TTFT. In a saturated serving system most of the latency is admission delay,
+not generation.
 
 > **What these numbers are.** Modelled time from a stated linear cost function
-> (`prefill = 2.0 ms + 0.08·tokens`, `decode = 1.5 ms + 0.05·requests + 0.004·context`),
-> not measurements of a GPU. The engine, scheduler, KV manager and metrics are real; the
-> execution cost is a model, so the results are reproducible and comparative rather than
-> absolute. Everything below comes out of the scripts in this repository, see
-> [Reproduce](#reproduce).
+> (`prefill = 2.0 ms + 0.08·tokens`, `decode = 1.5 ms + 0.05·requests + 0.004·context`), not
+> measurements of a GPU. The engine, scheduler, KV manager and metrics are real; the execution
+> cost is a model, so the results are reproducible and comparative rather than absolute.
+> Everything below comes out of the scripts in this repository, see [Reproduce](#reproduce).
 
 ---
 
@@ -140,29 +139,25 @@ order, and the invariants to poke at yourself.
 
 ## What a run looks like
 
-Four requests, a 32-token step budget, 16-token prefill chunks, a 24-block pool. A `P<n>`
-cell is a prefill chunk of *n* tokens for that request; each `D1` is one output token:
+Four requests, a 32-token step budget, 16-token prefill chunks, a 24-block pool. A `P<n>` cell
+is a prefill chunk of *n* tokens for that request; each `D1` is one output token. Prefill
+chunks interleave with decode, the budget is never exceeded, requests finish at different steps
+and their slots go idle, and the tail runs with one or two requests active:
 
 ![timeline](figures/timeline.png)
 
-Prefill chunks interleave with decode (steps 1–5 admit new requests while others
-generate), the 32-token budget is never exceeded, requests finish at different steps and
-their slots go idle, and the tail runs with only one or two requests active.
-
-The same run's memory and load. The dashed line is internal fragmentation, reserved block
-capacity holding no tokens, which comes and goes as sequences start, cross block
-boundaries and finish:
+The same run's memory. The dashed line is internal fragmentation, reserved block capacity
+holding no tokens, which comes and goes as sequences start, cross block boundaries and finish:
 
 ![KV and load](figures/kv_and_load.png)
 
-And the latency spread a single run produces, from the 300-request run at Experiment 1's
-16 req/s point:
+The latency spread one run produces, from the 300-request run at Experiment 1's 16 req/s point:
 
 ![latency distributions](figures/latency_distributions.png)
 
 The TTFT histogram is bimodal: a fast cluster that arrived when the engine was idle, and a
-queueing mode around 2.2 s. ITL stays in a tight 3–7 ms band. Latency under load is mostly
-a story about when you arrived.
+queueing mode around 2.2 s. ITL stays in a tight 3–7 ms band. Latency under load is mostly a
+story about when you arrived.
 
 ---
 
@@ -184,9 +179,9 @@ Every figure is produced by `scripts/make_figures.py`, from a fixed seed, on eve
 | 64 req/s | 863.3 tok/s | 3,053.7 ms | 5,861.1 ms | 5,846.4 ms |
 | 256 req/s | 864.0 tok/s | 3,707.3 ms | 7,141.4 ms | 7,125.5 ms |
 
-Throughput flattens near 864 tok/s at ~32 req/s while p95 TTFT grows 233× (30.7 ms to
-7,141 ms). Past saturation, extra offered load becomes waiting. The queue-time column
-tracking TTFT almost exactly is the evidence.
+Throughput flattens near 864 tok/s at ~32 req/s while p95 TTFT grows 233×, from 30.7 ms to
+7,141 ms. Past saturation, extra offered load becomes waiting, not work: the queue-time column
+tracks TTFT almost exactly.
 
 ### 2. Static vs continuous batching
 
@@ -200,15 +195,11 @@ tracking TTFT almost exactly is the evidence.
 | 16 req/s | 845.1 tok/s | 492.4 tok/s | | 1,200.2 ms | 6,667.6 ms |
 | 32 req/s | 862.2 tok/s | 492.3 tok/s | | 4,157.3 ms | 10,105.0 ms |
 
-Static batching, meaning form a batch and run it to completion before admitting the next,
-caps at 492 tok/s and is 5.6× worse on p95 TTFT at 16 req/s. A slot that frees stays idle
-until the whole batch drains. Below ~8 req/s the two are identical, because the engine is
-not saturated and there is nothing to refill.
-
-With homogeneous lengths the two policies produce identical numbers, since the whole batch
-finishes on one step and no slot is ever idle. Static batching loses when the batch is
-heterogeneous, which the mixed workload above is. `check_policies.py` asserts both the
-difference and the identity.
+Static batching, meaning form a batch and run it to completion before admitting the next, caps
+at 492 tok/s and is 5.6× worse on p95 TTFT at 16 req/s: a slot that frees stays idle until the
+whole batch drains. Below ~8 req/s the two are identical, and with homogeneous lengths they are
+identical at every rate; static batching loses only on a heterogeneous batch, which the mixed
+workload above is. `check_policies.py` asserts both the difference and the identity.
 
 ### 3. Chunked prefill
 
@@ -221,15 +212,12 @@ difference and the identity.
 | Cap 32 | 660.4 ms | 5.81 ms | 883.9 tok/s | 62 tokens |
 | Cap 16 | **640.0 ms** | **5.72 ms** | **888.4 tok/s** | 48 tokens |
 
-Chunking at 16 tokens improves every aggregate: mean TTFT −12%, p95 ITL −13%, throughput
-+2%. The textbook trade-off predicts the opposite, and the reason is this workload. With
-prompts up to 512 tokens and a 64-token budget, letting one request consume a whole step
-holds up admission for everyone behind it, so shorter chunks admit more requests per unit
-time.
-
-Per request the trade is still there and points the other way for long prompts: the short
-request's TTFT improves while the long request's worsens, measured in `TESTING.md`
-Experiment 2. Aggregate curves hide that.
+Chunking at 16 tokens improves every aggregate: mean TTFT −12%, p95 ITL −13%, throughput +2%.
+The textbook trade-off predicts the opposite, and the reason is this workload: with prompts up to
+512 tokens and a 64-token budget, letting one request consume a whole step holds up admission for
+everyone behind it. Per request the trade is still there and points the other way for long
+prompts, the short request's TTFT improving while the long request's worsens (`TESTING.md`
+Experiment 2). Aggregate curves hide that.
 
 ### 4. The token budget is not "bigger is better"
 
@@ -242,10 +230,9 @@ Experiment 2. Aggregate curves hide that.
 | 64 (default) | 2,894.1 ms | 5,794.0 ms | 6.72 ms | 8.33 ms | 531.5 tok/s |
 | 128 | 3,312.9 ms | 6,600.2 ms | 7.18 ms | 12.00 ms | 507.1 tok/s |
 
-TTFT is non-monotonic in the step budget: 32 tokens/step beats both 16 and 128, and it is
-also the throughput peak. A larger budget lets one long prompt monopolise a step and
-pushes decodes and short prompts out; a smaller one adds per-step overhead. The configured
-default of 64 is not the best value for this workload.
+TTFT is non-monotonic in the step budget: 32 tokens/step beats both 16 and 128 and is also the
+throughput peak. A larger budget lets one long prompt monopolise a step and pushes decodes and
+short prompts out. The default of 64 is not the best value for this workload.
 
 ### 5. KV pressure
 
@@ -261,13 +248,11 @@ default of 64 is not the best value for this workload.
 | 64 blocks | 1,036.0 tok/s | 11.7 ms | 1 | 120/120 |
 | 128 blocks | 1,036.0 tok/s | 11.7 ms | 0 | 120/120 |
 
-Below the working set, the pool sets the throughput ceiling. An 8-block pool needs 822
-recomputations to finish the work a 64-block pool finishes with 1, at 8.7 seconds of p95
-TTFT against 12 ms.
-
-Completion stays at 120/120 in every configuration. Recompute preemption converts memory
-pressure into work and latency instead of failed requests: the victim's generated tokens
-are kept and only its prompt is recomputed.
+Below the working set, the pool sets the throughput ceiling: an 8-block pool needs 822
+recomputations for work a 64-block pool finishes with 1, at 8.7 s of p95 TTFT against 12 ms.
+Completion stays at 120/120 in every configuration, because recompute preemption turns memory
+pressure into work and latency rather than failed requests. A victim keeps its generated tokens
+and only recomputes its prompt.
 
 ### 6. Block size
 
@@ -280,16 +265,16 @@ are kept and only its prompt is recomputed.
 | 32 | 10.2% | 29.8% | 1,200 ms | 845 tok/s |
 | 64 | 18.6% | 42.2% | 1,200 ms | 845 tok/s |
 
-Internal fragmentation scales with block size, 2.6% at 8 tokens to 18.6% at 64. Latency
-and throughput do not move, because the cost model charges nothing per block. So in this
-runtime block size is a memory-efficiency knob and nothing else. A real implementation
-would price the block-table and gather overhead that makes very small blocks unattractive.
+Internal fragmentation scales with block size, 2.6% at 8 tokens to 18.6% at 64. Latency and
+throughput do not move, because the cost model charges nothing per block, so block size here is a
+memory-efficiency knob and nothing else. A real implementation would price the block-table and
+gather overhead that makes very small blocks unattractive.
 
-The figure also shows two ways to sweep block size. Holding the pool at 128 blocks varies
-capacity as well (1024 to 8192 tokens); holding capacity at 2048 tokens does not. At 8
-tokens/block the difference is visible, the pool sweep gets 826 tok/s against 845, and at
-16+ both are above the working set and identical. A block-size sweep that fixes the block
-count is also a capacity sweep.
+The figure shows two ways to sweep it. Holding the pool at 128 blocks varies capacity as well
+(1024 to 8192 tokens); holding capacity at 2048 tokens does not. At 8 tokens/block the
+difference is visible, the pool sweep getting 826 tok/s against 845, and above that both are
+past the working set and identical. A block-size sweep that fixes the block count is also a
+capacity sweep, which is easy to miss.
 
 ### 7. Policy comparison
 
@@ -304,12 +289,11 @@ One saturating workload (200 requests, Poisson 64/s), four policies:
 | `balanced` | 1,149.5 tok/s | 3,555.5 ms | 7,138.9 ms | 8.25 ms |
 | `static` | 500.8 tok/s | 10,859.4 ms | 21,051.4 ms | 3.20 ms |
 
-Under a saturated queue, `prefill_first` is worse on every latency metric. It loses
-throughput (1,039 against 1,151 tok/s), and since TTFT here is dominated by queue depth,
-that loss costs more than prefill priority wins back. `balanced` matches `fcfs` because
-with only 4–8 decoders its 16-token prefill floor is never binding.
-
-Experiment 8 isolates the mechanism instead of averaging it away.
+Under a saturated queue, `prefill_first` is worse on every latency metric: it loses throughput
+(1,039 against 1,151 tok/s) and, since TTFT here is dominated by queue depth, that loss costs
+more than prefill priority wins back. `balanced` matches `fcfs` because with only 4–8 decoders
+its 16-token prefill floor is never binding. Experiment 8 isolates the mechanism instead of
+averaging it away.
 
 ### 8. Decode priority is a trade, not a win
 
@@ -324,10 +308,9 @@ Experiment 8 isolates the mechanism instead of averaging it away.
 | `balanced` | 49.3 ms | 2.6 ms |
 | `static` | not served within 400 steps | 2.0 ms |
 
-Prefill priority starts the new request 2.4× sooner and makes the requests already in
-flight wait 6.7× longer for their next token. The two policies choose different victims.
-`static` never serves the late request within the window because no slot frees until its
-batch drains.
+Prefill priority starts the new request 2.4× sooner and makes the requests already in flight
+wait 6.7× longer for their next token. The two policies choose different victims. `static` never
+serves the late request within the window, because no slot frees until its batch drains.
 
 ### 9. Fairness: bounding the worst wait
 
@@ -344,15 +327,14 @@ a saturated decode batch:
 | `balanced`, both | 40 steps |
 
 Each knob has one job: `prefill_reservation` is a floor the decodes may not spend, and
-`max_wait_steps` decides which waiter the floor is spent on. Together they cut the worst
-wait 5× (212 to 40 steps) with essentially unchanged throughput, 2,420 tok/s for
-`decode_first` against 2,399–2,485 for the balanced variants.
+`max_wait_steps` decides which waiter the floor is spent on. Together they cut the worst wait 5×
+(212 to 40 steps) with essentially unchanged throughput, 2,420 tok/s against 2,399–2,485 for
+the balanced variants.
 
-Decode-first does not starve prefills into never running. A prefill can be granted zero
-tokens for a step, repeatedly, which is why the worst wait reaches 212 steps, but every
-request is eventually served: admission is arrival-ordered and every output budget is
-finite, so the decode batch always drains. The failure mode is latency, not deadlock, and
-ageing is what bounds it.
+Decode-first does not starve prefills into never running. A prefill can be granted zero tokens
+for a step, repeatedly, which is why the worst wait reaches 212 steps, but every request is
+eventually served: admission is arrival-ordered and every output budget is finite, so the decode
+batch always drains. The failure mode is latency, not deadlock, and ageing bounds it.
 
 ### 10. The arrival process changes what "the same load" measures
 
@@ -364,11 +346,10 @@ ageing is what bounds it.
 | Poisson @16/s | 845.1 tok/s | 1,200.2 ms | 559.3 ms | 6.56 ms |
 | Closed loop (4 clients) | 639.4 tok/s | 34.9 ms | **0.059 ms** | 4.20 ms |
 
-Closed-loop queue time is essentially zero by construction: a client only issues its next
-request after the previous one finishes, so the offered load self-limits. That makes it
-the right workload for comparing scheduler behaviour, while burst measures capacity and
-Poisson models an open-loop service. Reporting one number without naming the arrival model
-is not reporting a result.
+Closed-loop queue time is essentially zero by construction: a client issues its next request
+only after the previous one finishes, so the offered load self-limits. It is the right workload
+for comparing scheduler behaviour, while burst measures capacity and Poisson models an open-loop
+service. One number without its arrival model is not a result.
 
 ### 11. Prefix caching: KV computed once, reused by everyone
 
@@ -385,72 +366,66 @@ arrivals, 256 blocks, a 64-token budget:
 | 16 req/s | 58,560 → **1,472** | 1,319.6 → 1,104.1 ms | 1,572.4 → 1,398.5 ms | 389.1 → **403.3 tok/s** |
 | 32 req/s | 58,560 → **1,472** | 3,084.8 → 2,859.6 ms | 3,339.1 → 3,156.2 ms | 389.4 → **404.4 tok/s** |
 
-The prefix is computed once instead of 120 times, which removes 97% of all prefill work,
-and 119 of 120 requests inherit KV someone else already computed. Mean TTFT falls 89% at
-2 req/s, and throughput rises slightly because the freed compute goes to decoding.
+The prefix is computed once instead of 120 times, removing 97% of all prefill work, and 119 of
+120 requests inherit KV someone else already computed. Mean TTFT falls 89% at 2 req/s, and
+throughput rises slightly because the freed compute goes to decoding. The benefit is largest
+where the engine is not yet saturated and shrinks as queueing takes over: at 32 req/s the queue
+is what the request waits for, so a cache, being a compute optimisation, has little left to give.
 
-The benefit is largest where the engine is not yet saturated and shrinks as queueing takes
-over. At 32 req/s the queue is what the request waits for, so a cache, being a compute
-optimisation, has little left to give.
+Two design points make it safe. **Only full blocks are cached, and a hit lands on a block
+boundary.** A cached block is immutable and the block a request writes next is always one it
+owns outright, so there is no copy-on-write and no shared block is ever written. Contents are
+hashed together with the hash of the block before them, so a block only matches at the same
+absolute positions; rotary positions are baked into the KV, so matching on content alone would
+be wrong. **And a hit is planned, not bolted on.** The scheduler shrinks the request's remaining
+work and block requirement and asks the pool whether the rest of the sequence fits before
+sharing anything, then the engine commits the attachment before it allocates. That is what
+stops the failure mode the first implementation had: a request a cached prefix makes cheap to
+evict gets evicted, re-admitted and evicted again, forever. Under pressure a request waits its
+turn and takes the prefix later.
 
-Two design points make it safe.
-
-**Only full blocks are cached, and a hit lands on a block boundary.** A cached block is
-immutable and the block a request writes next is always one it owns outright, so there is
-no copy-on-write and no shared block is ever written. Contents are hashed together with
-the hash of the block before them, so a block only matches at the same absolute positions.
-Rotary positions are baked into the KV, so matching on content alone would be wrong.
-
-**A hit is planned, not bolted on.** The scheduler shrinks the request's remaining work
-and block requirement and asks the pool whether the rest of the sequence fits before
-sharing anything. The engine commits the attachment before it allocates. Planning it this
-way is what stops the failure mode the first implementation had: a request that a cached
-prefix makes cheap to evict gets evicted, re-admitted and evicted again, forever. Under
-real pressure a request waits its turn and takes the prefix later.
-
-Two limits, both measured above. Requests that arrive together cannot share, because
-nothing has been computed yet when the second one is scheduled, so staggered arrivals are
-what make a shared prefix pay. And cached blocks still occupy the pool, they are merely
-evictable, so the cache competes with live requests for capacity.
+Two limits, both measured above. Requests that arrive together cannot share, because nothing has
+been computed yet when the second one is scheduled, so staggered arrivals are what make a shared
+prefix pay. And cached blocks still occupy the pool, they are merely evictable, so the cache
+competes with live requests for capacity.
 
 ---
 
 ## How the scheduler works
 
-**One step, one budget.** Every step plans at most `max_batch_tokens` of work, split
-between decode tokens (one per decoding request) and prefill chunks. The budget is a hard
-ceiling and the chunk cap can only lower a chunk. A prompt longer than the budget is split
-rather than stalled, because refusing to split would deadlock.
+**One step, one budget.** Every step plans at most `max_batch_tokens` of work, split between
+decode tokens (one per decoding request) and prefill chunks. The budget is a hard ceiling and
+the chunk cap can only lower a chunk. A prompt longer than the budget is split rather than
+stalled, because refusing to split would deadlock.
 
-**Two passes, speculative.** The scheduler builds a plan, and if it does not fit the KV
-pool it names a victim, marks the eviction in the plan only, and rebuilds. The engine then
-commits: free the victims' blocks, rewind them, release anyone who finished, allocate for
-the work that ran, in that order. Nothing physical moves while planning.
+**Two passes, speculative.** The scheduler builds a plan; if it does not fit the pool it
+names a victim, marks the eviction in the plan only, and rebuilds. The engine then commits:
+free the victims' blocks, rewind them, release anyone who finished, allocate for the work
+that ran, in that order.
 
-**Preemption by recomputation.** A victim loses its cached prompt, its cursor rewinds to
-zero and its block table is cleared, but it keeps every token it generated. It is
-re-admitted later and recomputes its prompt. Victims are chosen youngest-first (LIFO), and
-only an older request may evict a younger one, which stops two requests from handing the
-pool back and forth.
+**Preemption by recomputation.** A victim loses its cached prompt, its cursor rewinds to zero
+and its block table is cleared, but it keeps every token it generated, is re-admitted later
+and recomputes its prompt. Victims are chosen youngest-first (LIFO) and only an older request
+may evict a younger one, which stops two requests handing the pool back and forth.
 
-**Cached prefixes are an allocation decision.** A request whose sequence starts with
-tokens someone else already computed inherits those blocks. The scheduler plans the hit
-like any other claim, with remaining work and block requirement both shrinking, and the
-pool has to be able to fund the rest of the sequence before the share is taken, so
-admission control and preemption keep working unchanged.
+**Cached prefixes are an allocation decision.** A request whose sequence starts with tokens
+someone else computed inherits those blocks. The hit is planned like any other claim, with
+remaining work and block requirement both shrinking, and the pool must be able to fund the
+rest of the sequence before the share is taken, so admission control and preemption keep
+working unchanged.
 
-**Policies are one decision wide.** `fcfs`, `decode_first`, `prefill_first`, `balanced`
-and `static` share the budget accounting, the memory planning and the eviction rule. They
-differ in who gets the step, or for `static` who is allowed to join a batch.
+**Policies are one decision wide.** `fcfs`, `decode_first`, `prefill_first`, `balanced` and
+`static` share the budget accounting, the memory planning and the eviction rule. They differ
+in who gets the step, or for `static` who may join a batch.
 
 ---
 
 ## A real model in the same runtime
 
-Everything above runs on a modelled execution cost, so that thousands of scheduling
-experiments stay reproducible in seconds. The same scheduler, block manager and engine
-also drive a real transformer with real KV tensors, which is what turns the block manager
-from bookkeeping into memory a model attends over.
+Everything above runs on a modelled execution cost, so thousands of scheduling experiments
+stay reproducible in seconds. The same scheduler, block manager and engine also drive a real
+transformer with real KV tensors, which is what turns the block manager from bookkeeping
+into memory a model attends over.
 
 ```bash
 pip install -e ".[torch]"
@@ -480,20 +455,19 @@ budget : 64 tokens/step, 1 concurrent requests
 steps=24 generated=24 throughput=75.1 tok/s ttft=39.9ms tpot=12.1ms kv_peak=1.6% evictions=0 wall=0.32s
 ```
 
-An instruct checkpoint still continues the prompt rather than answering it, because the
-demo feeds raw text and does no chat templating. Prompt formatting is a serving-layer
-concern; this project is the scheduler and the cache underneath it.
+An instruct checkpoint still continues the prompt rather than answering it, because the demo
+feeds raw text and does no chat templating. Prompt formatting is a serving-layer concern; this
+project is the scheduler and the cache underneath it.
 
-KV lives in `[layers, blocks, kv_heads, block_size, head_dim]` tensors. Logical block *i*
-of a request maps to a physical block through its block table, so the tensors attention
-reads are the tensors the pool owns. Each step flattens every scheduled request's chunk
-into one token sequence and runs one forward pass over it: per layer, the freshly computed
-keys and values are written into their physical blocks, each request's cached context is
-gathered back out by block table, and a block-diagonal causal mask keeps requests from
-attending to each other.
+KV lives in `[layers, blocks, kv_heads, block_size, head_dim]` tensors and a request's logical
+block *i* maps to a physical block through its block table, so the tensors attention reads are
+the tensors the pool owns. Each step flattens every scheduled request's chunk into one token
+sequence and runs one forward pass: per layer the new keys and values go into their physical
+blocks, each request's cached context is gathered back out by block table, and a
+block-diagonal causal mask keeps requests from attending to each other.
 
-I pinned this against HuggingFace's own forward pass rather than trusting the text, since
-a wrong rotation or a truncated dtype still produces plausible tokens:
+I pinned this against HuggingFace's own forward pass rather than trusting the text, since a
+wrong rotation or a truncated dtype still produces plausible tokens:
 
 | Check | Result |
 |---|---|
@@ -502,16 +476,15 @@ a wrong rotation or a truncated dtype still produces plausible tokens:
 | Greedy tokens vs `model.generate` | identical |
 | Chunked prefill, `block_size=1`, batching, preemption | identical tokens in every case |
 
-The float64 row is the strong one: agreement to machine precision rules out a
-mathematically different computation and leaves only float32 accumulation order.
+The float64 row is the strong one: agreement to machine precision rules out a mathematically
+different computation and leaves only accumulation order.
 
 A real forward samples the next token while computing the positions it was granted, so a
-decoding request always carries exactly one position whose KV is still pending, and the
-first token lands at the end of prefill, which is where a server first has something to
-stream and therefore where TTFT belongs. And because a runner that attends over the pool
-cannot compute before its blocks exist, the engine commits that runner's allocations
-before it executes, while the simulated runner keeps the strictly-speculative order. Both
-paths are covered by the check suite.
+decoding request always carries one position whose KV is pending and the first token lands at
+the end of prefill, where a server first has something to stream and where TTFT belongs. And
+because a runner attending over the pool cannot compute before its blocks exist, the engine
+commits that runner's allocations before it executes, while the simulated runner allocates
+after. The checks cover both paths.
 
 ---
 
@@ -600,18 +573,18 @@ figures/        generated by scripts/make_figures.py, committed for the README
 
 ## Where this goes next
 
-1. **Sharing across concurrent arrivals**: a request can only inherit a prefix that is
-   already computed, so a burst of identical prompts still computes it several times. A
-   "compute once, wait for it" admission rule would fix that.
-2. **Swap-based preemption**: copy a victim's blocks to host memory instead of recomputing,
-   and measure which wins as a function of prompt length, including when the prompt is
-   still in the prefix cache.
-3. **A fused paged-attention kernel**: the gather is the price of correctness and a kernel
-   that reads blocks in place is the price of speed. Prefix caching makes that gather read
-   the same blocks for many requests, which is what a kernel could exploit.
+1. **Sharing across concurrent arrivals**: a request can only inherit a prefix that is already
+   computed, so a burst of identical prompts still computes it several times. A "compute once,
+   wait for it" admission rule would fix that.
+2. **Swap-based preemption**: copy a victim's blocks to host memory instead of recomputing, and
+   measure which wins as a function of prompt length, including when the prompt is still in the
+   prefix cache.
+3. **A fused paged-attention kernel**: a kernel reading blocks in place removes the gather that
+   correctness currently costs, and prefix caching makes that gather read the same blocks for
+   many requests.
 
 ---
 
-*Every number in this README came from a run on this machine. `TESTING.md` is the
-companion hands-on guide: how to run each experiment, what to expect, which invariants to
-poke at, and how to read the code.*
+*Every number here came from a run on this machine. `TESTING.md` is the companion hands-on
+guide: how to run each experiment, what to expect, which invariants to poke at, and how to read
+the code.*
