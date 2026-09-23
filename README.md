@@ -5,15 +5,13 @@ KV management, with a scheduler you can measure.**
 
 ```text
 Python 3.12+   ·   zero runtime dependencies
-155 checks, no test framework   ·   5 scheduling policies
+155 checks   ·   5 scheduling policies
 3 arrival processes   ·   14 figures, all generated from real runs
 ```
 
-The engine turns a stream of concurrent generation requests into a sequence of model forward
-passes. Every step it decides how many compute tokens each request gets and which physical KV
-blocks back them. It is a scheduler and memory-management project: model execution is a stated
-cost model, and the decisions, the memory and the measurements are where the behaviour shows
-up.
+MiniServe turns concurrent generation requests into scheduled model-execution steps, deciding how many tokens each request computes and which physical KV blocks back them. Large benchmark sweeps use a deterministic execution-cost model for reproducible scheduler experiments; the same scheduler, engine, and block manager also drive a real Llama-family runner whose attention reads and writes the runtime's physical KV pool.
+
+The focus is the serving control plane: scheduling, memory management, prefix reuse, preemption, and the latency/throughput trade-offs they create.
 
 ---
 
@@ -37,8 +35,7 @@ KV peak utilization:       29.7%           (mean 13.9%, 5.4% internal fragmentat
 Decode batch (mean/max):   3.5 / 4
 ```
 
-Queue time is 97% of TTFT. In a saturated serving system most of the latency is admission delay,
-not generation.
+In this saturated workload, 97% of mean TTFT is queueing/admission delay rather than model execution.
 
 > **What these numbers are.** Modelled time from a stated linear cost function
 > (`prefill = 2.0 ms + 0.08·tokens`, `decode = 1.5 ms + 0.05·requests + 0.004·context`), not
@@ -101,11 +98,12 @@ Four rules hold the design together:
 ## Quickstart
 
 ```bash
-git clone <this repo> && cd mini_infer
+git clone https://github.com/awesome-pro/miniserve.git
+cd miniserve
 python -m venv .venv && source .venv/bin/activate
 pip install -e .                      # no runtime dependencies
 
-# 155 checks, no test framework: nine scripts of plain asserts
+# 155 checks: nine scripts of plain asserts
 for f in check_engine check_memory check_preemption check_metrics check_benchmark \
          check_policies check_prefix_cache check_visualizations check_torch_runner; do
   python scripts/$f.py; done
@@ -384,10 +382,9 @@ stops the failure mode the first implementation had: a request a cached prefix m
 evict gets evicted, re-admitted and evicted again, forever. Under pressure a request waits its
 turn and takes the prefix later.
 
-Two limits, both measured above. Requests that arrive together cannot share, because nothing has
-been computed yet when the second one is scheduled, so staggered arrivals are what make a shared
-prefix pay. And cached blocks still occupy the pool, they are merely evictable, so the cache
-competes with live requests for capacity.
+Two limits, both measured above. Requests scheduled concurrently before a matching prefix has 
+been computed cannot share it; staggered admission therefore produces more reuse. And cached blocks 
+still occupy the pool, they are merely evictable, so the cache competes with live requests for capacity.
 
 ---
 
