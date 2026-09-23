@@ -1,7 +1,7 @@
 # MiniServe: an LLM serving runtime
 
-**Continuous batching, token-budget scheduling, chunked prefill and block-based 
-KV+management, with a scheduler you can measure.**
+**Continuous batching, token-budget scheduling, chunked prefill and block-based
+KV management, with a scheduler you can measure.**
 
 ```text
 Python 3.12+   ·   zero runtime dependencies
