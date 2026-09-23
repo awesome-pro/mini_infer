@@ -1,7 +1,7 @@
 """Visualization package: text timelines, charts and plots of engine behaviour."""
 
-from mini_infer.visualizations.charts import bars, metric_panel, sparkline, trend_summary
-from mini_infer.visualizations.plots import (
+from miniserve.visualizations.charts import bars, metric_panel, sparkline, trend_summary
+from miniserve.visualizations.plots import (
     Histogram,
     HistogramPanel,
     Panel,
@@ -19,7 +19,7 @@ from mini_infer.visualizations.plots import (
     step_series,
     timeline_grid,
 )
-from mini_infer.visualizations.timeline import kv_pool_lines, timeline_lines, work_cell
+from miniserve.visualizations.timeline import kv_pool_lines, timeline_lines, work_cell
 
 __all__ = [
     "Histogram",

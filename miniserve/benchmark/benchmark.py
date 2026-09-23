@@ -14,10 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
-from mini_infer.benchmark.driver import Driver, RunResult
-from mini_infer.benchmark.workloads import WorkloadSpec
-from mini_infer.config import EngineConfig
-from mini_infer.engine.engine import Engine
+from miniserve.benchmark.driver import Driver, RunResult
+from miniserve.benchmark.workloads import WorkloadSpec
+from miniserve.config import EngineConfig
+from miniserve.engine.engine import Engine
 
 
 @dataclass(frozen=True, slots=True)

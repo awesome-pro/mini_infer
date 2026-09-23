@@ -14,9 +14,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from mini_infer.benchmark.workloads import Workload
-from mini_infer.engine.engine import Engine, EngineStep
-from mini_infer.metrics import RunMetrics
+from miniserve.benchmark.workloads import Workload
+from miniserve.engine.engine import Engine, EngineStep
+from miniserve.metrics import RunMetrics
 
 
 @dataclass(slots=True)

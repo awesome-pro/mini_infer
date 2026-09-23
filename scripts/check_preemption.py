@@ -15,9 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from _check import check, report
 
-from mini_infer import Engine, EngineConfig, Request, RunnerConfig
-from mini_infer.engine.engine import StepEventKind
-from mini_infer.engine.request import RequestStatus
+from miniserve import Engine, EngineConfig, Request, RunnerConfig
+from miniserve.engine.engine import StepEventKind
+from miniserve.engine.request import RequestStatus
 
 ZERO_COST = RunnerConfig(
     prefill_base_ms=0.0,

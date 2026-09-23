@@ -123,11 +123,11 @@ python examples/benchmark_demo.py      # saturation, KV sweeps, arrival models
 python examples/prefix_cache.py        # the same prefix computed once, not 120 times
 
 # benchmark anything from the CLI
-python -m mini_infer.cli --requests 200 --arrival poisson --rate 16
-python -m mini_infer.cli --sweep policy --values fcfs,prefill_first,balanced,static
-python -m mini_infer.cli --sweep max_batch_tokens --values 16,32,64,128 --export /tmp/r
-python -m mini_infer.cli --prefix-cache --requests 120 --rate 12
-python -m mini_infer.cli --sweep prefix_cache --values off,on --requests 120 --rate 12
+python -m miniserve.cli --requests 200 --arrival poisson --rate 16
+python -m miniserve.cli --sweep policy --values fcfs,prefill_first,balanced,static
+python -m miniserve.cli --sweep max_batch_tokens --values 16,32,64,128 --export /tmp/r
+python -m miniserve.cli --prefix-cache --requests 120 --rate 12
+python -m miniserve.cli --sweep prefix_cache --values off,on --requests 120 --rate 12
 
 # regenerate every figure in this README
 pip install -e ".[plot]" && python scripts/make_figures.py
@@ -560,7 +560,7 @@ same policy on the same seed produce bit-identical metric rows, asserted by
 
 ```bash
 # headline table
-python -m mini_infer.cli --requests 120 --arrival poisson --rate 16
+python -m miniserve.cli --requests 120 --arrival poisson --rate 16
 
 # every figure in this README, from a fixed seed
 python scripts/make_figures.py                 # writes figures/*.png
@@ -572,7 +572,7 @@ for f in check_engine check_memory check_preemption check_metrics check_benchmar
 
 # prefix caching, with and without
 python examples/prefix_cache.py --requests 120 --rate 12
-python -m mini_infer.cli --sweep prefix_cache --values off,on --requests 120 --rate 12
+python -m miniserve.cli --sweep prefix_cache --values off,on --requests 120 --rate 12
 
 # the real runner: paged attention, verified against HuggingFace
 python examples/real_model.py --concurrency 3
@@ -582,7 +582,7 @@ python scripts/check_torch_runner.py
 ## Repository layout
 
 ```text
-mini_infer/
+miniserve/
   engine/       request model, scheduling contract, policies, the execution loop
   memory/       KV block pool; BlockPlan is a transactional view of it
   runner/       execution-cost model, and the real torch runner with a paged KV pool

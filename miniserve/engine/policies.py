@@ -38,10 +38,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from mini_infer.config import EngineConfig
-from mini_infer.engine.request import Request, RequestStatus
-from mini_infer.engine.scheduler import ScheduledKind, ScheduledWork, SchedulerOutput
-from mini_infer.memory.block_manager import (
+from miniserve.config import EngineConfig
+from miniserve.engine.request import Request, RequestStatus
+from miniserve.engine.scheduler import ScheduledKind, ScheduledWork, SchedulerOutput
+from miniserve.memory.block_manager import (
     BlockPlan,
     PagedBlockManager,
     blocks_for_tokens,

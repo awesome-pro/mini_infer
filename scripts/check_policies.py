@@ -15,22 +15,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from _check import check, expect_raises, report
 
-from mini_infer import Engine, EngineConfig, Request, RunnerConfig
-from mini_infer.benchmark.benchmark import BenchmarkCase
-from mini_infer.benchmark.driver import Driver
-from mini_infer.benchmark.workloads import (
+from miniserve import Engine, EngineConfig, Request, RunnerConfig
+from miniserve.benchmark.benchmark import BenchmarkCase
+from miniserve.benchmark.driver import Driver
+from miniserve.benchmark.workloads import (
     Constant,
     LengthProfile,
     Uniform,
     WorkloadSpec,
 )
-from mini_infer.engine.policies import (
+from miniserve.engine.policies import (
     POLICIES,
     SchedulerBase,
     build_policy,
     policy_names,
 )
-from mini_infer.engine.request import RequestStatus
+from miniserve.engine.request import RequestStatus
 
 ZERO_COST = RunnerConfig(
     prefill_base_ms=0.0,

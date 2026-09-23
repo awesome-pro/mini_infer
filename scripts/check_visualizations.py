@@ -22,8 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from _check import check, expect_raises, report
 
-from mini_infer import Engine, EngineConfig, Request, RunnerConfig
-from mini_infer.visualizations.plots import (
+from miniserve import Engine, EngineConfig, Request, RunnerConfig
+from miniserve.visualizations.plots import (
     HistogramPanel,
     Panel,
     Point,
@@ -206,7 +206,7 @@ def check_shaping_does_not_import_matplotlib() -> None:
     script = (
         "import sys;"
         f"sys.path.insert(0, {str(ROOT)!r});"
-        "from mini_infer.visualizations.plots import histogram, series_from_rows;"
+        "from miniserve.visualizations.plots import histogram, series_from_rows;"
         "histogram([1.0, 2.0]);"
         "series_from_rows([{'a': 1}], 'a');"
         "print('matplotlib' in sys.modules)"

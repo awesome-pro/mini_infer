@@ -18,9 +18,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mini_infer import Engine, EngineConfig
-from mini_infer.benchmark.driver import Driver
-from mini_infer.benchmark.workloads import Constant, LengthProfile, WorkloadSpec
+from miniserve import Engine, EngineConfig
+from miniserve.benchmark.driver import Driver
+from miniserve.benchmark.workloads import Constant, LengthProfile, WorkloadSpec
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -141,7 +141,7 @@ def report(rows: list[dict], args: argparse.Namespace) -> None:
 
 def show_concurrent_sharing(args: argparse.Namespace) -> None:
     """Two live requests reading the same physical KV, which is the whole idea."""
-    from mini_infer import Request
+    from miniserve import Request
 
     _, prefix = shared_workload(args)
     config = EngineConfig(

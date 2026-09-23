@@ -5,10 +5,10 @@ one axis and exporting the rows for a README or a plot.
 
 Examples::
 
-    python -m mini_infer.cli --requests 200 --arrival poisson --rate 12
-    python -m mini_infer.cli --sweep rate --values 2,4,8,16,32,64
-    python -m mini_infer.cli --sweep policy --values fcfs,prefill_first,balanced,static
-    python -m mini_infer.cli --sweep num_blocks --values 16,32,64,128 --export results
+    python -m miniserve.cli --requests 200 --arrival poisson --rate 12
+    python -m miniserve.cli --sweep rate --values 2,4,8,16,32,64
+    python -m miniserve.cli --sweep policy --values fcfs,prefill_first,balanced,static
+    python -m miniserve.cli --sweep num_blocks --values 16,32,64,128 --export results
 """
 
 from __future__ import annotations
@@ -17,22 +17,22 @@ import argparse
 import sys
 from dataclasses import replace
 
-from mini_infer.benchmark.benchmark import (
+from miniserve.benchmark.benchmark import (
     BenchmarkCase,
     Report,
     SweepRow,
     write_csv,
     write_json,
 )
-from mini_infer.benchmark.workloads import (
+from miniserve.benchmark.workloads import (
     OUTPUT_PROFILES,
     PROMPT_PROFILES,
     WorkloadSpec,
     output_profile,
     prompt_profile,
 )
-from mini_infer.config import EngineConfig
-from mini_infer.engine.policies import policy_names
+from miniserve.config import EngineConfig
+from miniserve.engine.policies import policy_names
 
 #: Configuration axes that can be swept, and how to apply a value.
 SWEEPS: dict[str, str] = {
@@ -67,7 +67,7 @@ def parse_values(raw: str, axis: str) -> list:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="mini-infer",
+        prog="miniserve",
         description="Benchmark the mini inference runtime.",
     )
     parser.add_argument("--requests", type=int, default=200, help="number of requests")

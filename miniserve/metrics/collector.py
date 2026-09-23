@@ -23,10 +23,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from mini_infer.engine.request import Request
+from miniserve.engine.request import Request
 
 if TYPE_CHECKING:
-    from mini_infer.engine.engine import Engine, EngineStep
+    from miniserve.engine.engine import Engine, EngineStep
 
 
 def percentile(values: Sequence[float], quantile: float) -> float:
@@ -144,7 +144,7 @@ class MetricsCollector:
     """Records an engine run and reports its latency and throughput.
 
     Attached to an engine, so it observes the engine's own clock. Under a
-    :class:`~mini_infer.clock.VirtualClock` that clock is the modelled execution
+    :class:`~miniserve.clock.VirtualClock` that clock is the modelled execution
     time, which is what makes simulated benchmarks reproducible; under a
     ``WallClock`` it is real elapsed time.
     """
@@ -182,7 +182,7 @@ class MetricsCollector:
 
     def record_step(self, step: EngineStep) -> None:
         """Record one engine step and every request-level event inside it."""
-        from mini_infer.engine.engine import StepEventKind
+        from miniserve.engine.engine import StepEventKind
 
         for event in step.events:
             metrics = self._metrics_for_id(event.request_id)

@@ -19,8 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from _check import check, close, report
 
-from mini_infer import Engine, EngineConfig, Request, RunnerConfig
-from mini_infer.metrics import MetricsCollector, RunMetrics, percentile
+from miniserve import Engine, EngineConfig, Request, RunnerConfig
+from miniserve.metrics import MetricsCollector, RunMetrics, percentile
 
 ZERO_COST = RunnerConfig(
     prefill_base_ms=0.0,

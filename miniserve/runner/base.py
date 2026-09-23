@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from mini_infer.engine.scheduler import SchedulerOutput
+from miniserve.engine.scheduler import SchedulerOutput
 
 
 @dataclass(slots=True)

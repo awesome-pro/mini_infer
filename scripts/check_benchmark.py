@@ -23,8 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from _check import check, expect_raises, report
 
-from mini_infer import Engine, EngineConfig, RunnerConfig
-from mini_infer.benchmark import (
+from miniserve import Engine, EngineConfig, RunnerConfig
+from miniserve.benchmark import (
     Driver,
     Report,
     WorkloadSpec,
@@ -35,7 +35,7 @@ from mini_infer.benchmark import (
     write_csv,
     write_json,
 )
-from mini_infer.benchmark.workloads import Constant, LogNormal, Uniform
+from miniserve.benchmark.workloads import Constant, LogNormal, Uniform
 
 FAST_RUNNER = RunnerConfig(
     prefill_base_ms=1.0,

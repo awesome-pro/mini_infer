@@ -15,8 +15,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from mini_infer.engine.request import Request
-from mini_infer.engine.scheduler import ScheduledWork
+from miniserve.engine.request import Request
+from miniserve.engine.scheduler import ScheduledWork
 
 
 def blocks_for_tokens(num_tokens: int, block_size: int) -> int:

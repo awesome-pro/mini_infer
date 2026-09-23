@@ -23,9 +23,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mini_infer import Engine, Request, WallClock
-from mini_infer.engine.engine import StepEventKind
-from mini_infer.runner.torch_runner import (
+from miniserve import Engine, Request, WallClock
+from miniserve.engine.engine import StepEventKind
+from miniserve.runner.torch_runner import (
     DEFAULT_MODEL,
     TorchModelRunner,
     engine_config_for_model,

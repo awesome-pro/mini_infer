@@ -11,7 +11,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from mini_infer.engine.request import Request
+from miniserve.engine.request import Request
 
 
 class ScheduledKind(StrEnum):

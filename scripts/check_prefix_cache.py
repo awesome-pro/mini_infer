@@ -20,9 +20,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from _check import check, report
 
-from mini_infer import Engine, EngineConfig, Request, RunnerConfig
-from mini_infer.engine.request import RequestStatus
-from mini_infer.memory.block_manager import (
+from miniserve import Engine, EngineConfig, Request, RunnerConfig
+from miniserve.engine.request import RequestStatus
+from miniserve.memory.block_manager import (
     PagedBlockManager,
     block_hash,
     blocks_for_tokens,

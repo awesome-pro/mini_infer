@@ -4,10 +4,10 @@ Implementing continuous batching, token-budget scheduling, chunked prefill and
 block-based KV cache management.
 """
 
-from mini_infer.clock import Clock, VirtualClock, WallClock
-from mini_infer.config import EngineConfig, RunnerConfig
-from mini_infer.engine.engine import Engine, EngineStep, StepEvent, StepEventKind
-from mini_infer.engine.policies import (
+from miniserve.clock import Clock, VirtualClock, WallClock
+from miniserve.config import EngineConfig, RunnerConfig
+from miniserve.engine.engine import Engine, EngineStep, StepEvent, StepEventKind
+from miniserve.engine.policies import (
     POLICIES,
     BalancedPolicy,
     DecodeFirstPolicy,
@@ -17,9 +17,9 @@ from mini_infer.engine.policies import (
     build_policy,
     policy_names,
 )
-from mini_infer.engine.request import Request, RequestStatus
-from mini_infer.engine.scheduler import ScheduledKind, ScheduledWork, SchedulerOutput
-from mini_infer.metrics.collector import MetricsCollector, RunMetrics
+from miniserve.engine.request import Request, RequestStatus
+from miniserve.engine.scheduler import ScheduledKind, ScheduledWork, SchedulerOutput
+from miniserve.metrics.collector import MetricsCollector, RunMetrics
 
 __all__ = [
     "POLICIES",

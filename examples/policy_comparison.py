@@ -14,10 +14,10 @@ Run with::
 
 from __future__ import annotations
 
-from mini_infer import Engine, EngineConfig, Request, policy_names
-from mini_infer.benchmark.benchmark import Report, SweepRow
-from mini_infer.benchmark.driver import Driver
-from mini_infer.benchmark.workloads import (
+from miniserve import Engine, EngineConfig, Request, policy_names
+from miniserve.benchmark.benchmark import Report, SweepRow
+from miniserve.benchmark.driver import Driver
+from miniserve.benchmark.workloads import (
     Constant,
     LengthProfile,
     LogNormal,

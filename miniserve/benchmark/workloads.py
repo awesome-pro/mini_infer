@@ -27,7 +27,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from mini_infer.engine.request import Request
+from miniserve.engine.request import Request
 
 
 class LengthDistribution(Protocol):

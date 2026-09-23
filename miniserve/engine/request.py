@@ -6,7 +6,7 @@ import itertools
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from mini_infer.block_table import BlockTable
+from miniserve.block_table import BlockTable
 
 _id_counter = itertools.count()
 #: Submission order, used wherever 'younger' has to mean something when two

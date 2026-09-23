@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from _check import check, expect_raises, report
 
-from mini_infer import Engine, EngineConfig, Request, RequestStatus, RunnerConfig
-from mini_infer.memory.block_manager import (
+from miniserve import Engine, EngineConfig, Request, RequestStatus, RunnerConfig
+from miniserve.memory.block_manager import (
     PagedBlockManager,
     blocks_for_tokens,
 )

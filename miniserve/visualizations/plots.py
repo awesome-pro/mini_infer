@@ -1,7 +1,7 @@
 """Figures for documents.
 
-Text is the primary renderer — see :mod:`mini_infer.visualizations.charts` and
-:mod:`mini_infer.visualizations.timeline`. This module exists for the README and for
+Text is the primary renderer — see :mod:`miniserve.visualizations.charts` and
+:mod:`miniserve.visualizations.timeline`. This module exists for the README and for
 the project write-up, where a picture carries an argument that a table cannot, and it
 is the only place in the package that wants matplotlib.
 
@@ -19,8 +19,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from mini_infer.engine.engine import Engine, EngineStep
-from mini_infer.engine.request import Request
+from miniserve.engine.engine import Engine, EngineStep
+from miniserve.engine.request import Request
 
 #: Idle / prefill / decode, in the order the timeline colormap expects.
 KIND_CODE = {"": 0, "prefill": 1, "decode": 2}

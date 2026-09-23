@@ -14,11 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from _check import check, close, expect_raises, report
 
-from mini_infer.clock import Clock, VirtualClock, WallClock
-from mini_infer.config import EngineConfig, RunnerConfig
-from mini_infer.engine.engine import Engine, StepEventKind
-from mini_infer.engine.request import Request, RequestStatus
-from mini_infer.engine.scheduler import (
+from miniserve.clock import Clock, VirtualClock, WallClock
+from miniserve.config import EngineConfig, RunnerConfig
+from miniserve.engine.engine import Engine, StepEventKind
+from miniserve.engine.request import Request, RequestStatus
+from miniserve.engine.scheduler import (
     ScheduledKind,
     ScheduledWork,
     SchedulerOutput,

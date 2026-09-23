@@ -22,9 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from _check import check, close, expect_raises, report
 
-from mini_infer import Engine, EngineConfig, Request, VirtualClock, WallClock
-from mini_infer.engine.engine import StepEventKind
-from mini_infer.engine.request import RequestStatus
+from miniserve import Engine, EngineConfig, Request, VirtualClock, WallClock
+from miniserve.engine.engine import StepEventKind
+from miniserve.engine.request import RequestStatus
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -87,7 +87,7 @@ def engine_config(**overrides) -> EngineConfig:
 
 
 def runner_for(config: EngineConfig):
-    from mini_infer.runner.torch_runner import TorchModelRunner
+    from miniserve.runner.torch_runner import TorchModelRunner
 
     _, path = tiny_model()
     return TorchModelRunner(config, model=str(path))
@@ -135,8 +135,8 @@ def check_importing_the_package_does_not_import_torch() -> None:
     script = (
         "import sys;"
         f"sys.path.insert(0, {str(ROOT)!r});"
-        "import mini_infer;"
-        "mini_infer.Engine(mini_infer.EngineConfig()).step();"
+        "import miniserve;"
+        "miniserve.Engine(miniserve.EngineConfig()).step();"
         "print('torch' in sys.modules)"
     )
     finished = subprocess.run(
@@ -144,12 +144,12 @@ def check_importing_the_package_does_not_import_torch() -> None:
     )
     assert finished.returncode == 0, finished.stderr
     assert finished.stdout.strip() == "False", (
-        f"importing mini_infer pulled in torch: {finished.stdout!r}"
+        f"importing miniserve pulled in torch: {finished.stdout!r}"
     )
 
 
 def check_config_can_be_derived_from_the_model() -> None:
-    from mini_infer.runner.torch_runner import TorchModelRunner, engine_config_for_model
+    from miniserve.runner.torch_runner import TorchModelRunner, engine_config_for_model
 
     _, path = tiny_model()
     derived = engine_config_for_model(str(path))
@@ -162,7 +162,7 @@ def check_config_can_be_derived_from_the_model() -> None:
 
 
 def check_geometry_mismatch_is_rejected() -> None:
-    from mini_infer.runner.torch_runner import TorchModelRunner
+    from miniserve.runner.torch_runner import TorchModelRunner
 
     _, path = tiny_model()
     wrong = engine_config(num_layers=99, num_kv_heads=7)
@@ -174,7 +174,7 @@ def check_geometry_mismatch_is_rejected() -> None:
 
 
 def check_pool_matches_the_declared_block_count() -> None:
-    from mini_infer.runner.torch_runner import TorchModelRunner, engine_config_for_model
+    from miniserve.runner.torch_runner import TorchModelRunner, engine_config_for_model
 
     _, path = tiny_model()
     config = engine_config_for_model(str(path), num_blocks=32, block_size=8)
@@ -197,7 +197,7 @@ def check_pool_matches_the_declared_block_count() -> None:
 
 
 def check_pool_dtype_follows_the_config() -> None:
-    from mini_infer.runner.torch_runner import TorchModelRunner, engine_config_for_model
+    from miniserve.runner.torch_runner import TorchModelRunner, engine_config_for_model
 
     _, path = tiny_model()
     half = TorchModelRunner(engine_config(dtype_bytes=2), model=str(path))
@@ -238,7 +238,7 @@ def check_float64_reproduces_the_reference_exactly() -> None:
     This is the strongest statement available: it rules out a mathematically
     different computation, leaving only float32 accumulation order.
     """
-    from mini_infer.runner.torch_runner import TorchModelRunner, engine_config_for_model
+    from miniserve.runner.torch_runner import TorchModelRunner, engine_config_for_model
 
     _, path = tiny_model()
     config = engine_config_for_model(str(path), dtype_bytes=8)
@@ -309,7 +309,7 @@ def check_a_shared_prefix_generates_the_same_tokens() -> None:
     physical blocks. If the sharing were even slightly wrong — wrong block, wrong
     position, wrong rotation — the logits would move and the greedy tokens would differ.
     """
-    from mini_infer.runner.torch_runner import TorchModelRunner, engine_config_for_model
+    from miniserve.runner.torch_runner import TorchModelRunner, engine_config_for_model
 
     _, path = tiny_model()
     want = greedy_reference(PROMPT_A, 4)

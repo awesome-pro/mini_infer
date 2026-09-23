@@ -12,8 +12,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mini_infer import Engine, EngineConfig, Request, RunnerConfig
-from mini_infer.metrics import RunMetrics
+from miniserve import Engine, EngineConfig, Request, RunnerConfig
+from miniserve.metrics import RunMetrics
 
 
 def build_requests() -> list[Request]:
@@ -110,7 +110,7 @@ def print_report(metrics: RunMetrics) -> None:
 
 
 def main() -> None:
-    print("MiniServe observability demo - TTFT, ITL, TPOT, throughput, KV pressure")
+    print("MiniServe observability demo: TTFT, ITL, TPOT, throughput, KV pressure")
     engine = build_engine()
     config = engine.config
     print(

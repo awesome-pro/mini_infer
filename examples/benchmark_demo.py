@@ -11,15 +11,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mini_infer import EngineConfig, RunnerConfig
-from mini_infer.benchmark import (
+from miniserve import EngineConfig, RunnerConfig
+from miniserve.benchmark import (
     Report,
     WorkloadSpec,
     output_profile,
     prompt_profile,
     run_case,
 )
-from mini_infer.visualizations import metric_panel, trend_summary
+from miniserve.visualizations import metric_panel, trend_summary
 
 RUNNER = dict(
     prefill_base_ms=2.0,

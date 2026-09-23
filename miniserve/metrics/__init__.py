@@ -1,6 +1,6 @@
 """Metrics package: measured behaviour of an engine run."""
 
-from mini_infer.metrics.collector import (
+from miniserve.metrics.collector import (
     MetricsCollector,
     RequestMetrics,
     RunMetrics,

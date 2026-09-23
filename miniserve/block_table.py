@@ -1,7 +1,7 @@
 """Block tables: the logical-to-physical mapping for one sequence's KV cache.
 
 Lives outside both ``engine`` and ``memory`` because a
-:class:`~mini_infer.engine.request.Request` owns one while the block manager
+:class:`~miniserve.engine.request.Request` owns one while the block manager
 allocates into one; keeping it here avoids a circular import between them.
 """
 

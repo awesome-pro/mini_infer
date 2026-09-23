@@ -5,8 +5,8 @@ freed and looked up through per-request block tables. Attention is not executed
 over the physical tensors here, so this is deliberately not called PagedAttention.
 """
 
-from mini_infer.block_table import BlockTable
-from mini_infer.memory.block_manager import (
+from miniserve.block_table import BlockTable
+from miniserve.memory.block_manager import (
     BlockManager,
     BlockPlan,
     MemoryStats,

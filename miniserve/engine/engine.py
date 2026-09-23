@@ -13,14 +13,14 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 
-from mini_infer.clock import Clock, VirtualClock
-from mini_infer.config import EngineConfig
-from mini_infer.engine.request import Request, RequestStatus
-from mini_infer.engine.scheduler import ScheduledKind, SchedulerOutput
-from mini_infer.memory.block_manager import PagedBlockManager
-from mini_infer.metrics.collector import MetricsCollector
-from mini_infer.runner.base import ModelRunner
-from mini_infer.runner.simulated_runner import SimulatedModelRunner
+from miniserve.clock import Clock, VirtualClock
+from miniserve.config import EngineConfig
+from miniserve.engine.request import Request, RequestStatus
+from miniserve.engine.scheduler import ScheduledKind, SchedulerOutput
+from miniserve.memory.block_manager import PagedBlockManager
+from miniserve.metrics.collector import MetricsCollector
+from miniserve.runner.base import ModelRunner
+from miniserve.runner.simulated_runner import SimulatedModelRunner
 
 
 class StepEventKind(StrEnum):
@@ -651,7 +651,7 @@ def _build_default_scheduler(
     memory: PagedBlockManager | None,
     pending_decode_token: bool = False,
 ) -> Scheduler:
-    from mini_infer.engine.policies import build_policy
+    from miniserve.engine.policies import build_policy
 
     return build_policy(
         config.policy, config, memory=memory, pending_decode_token=pending_decode_token

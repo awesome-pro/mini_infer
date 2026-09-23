@@ -7,9 +7,9 @@ approximation (a roofline-style linear form), not a measurement of any GPU.
 
 from __future__ import annotations
 
-from mini_infer.config import RunnerConfig
-from mini_infer.engine.scheduler import SchedulerOutput
-from mini_infer.runner.base import RunnerResult, TimingResult
+from miniserve.config import RunnerConfig
+from miniserve.engine.scheduler import SchedulerOutput
+from miniserve.runner.base import RunnerResult, TimingResult
 
 _MS_PER_S = 1000.0
 

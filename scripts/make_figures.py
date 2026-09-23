@@ -21,17 +21,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mini_infer import Engine, EngineConfig, Request, policy_names
-from mini_infer.benchmark.benchmark import BenchmarkCase
-from mini_infer.benchmark.driver import Driver
-from mini_infer.benchmark.workloads import (
+from miniserve import Engine, EngineConfig, Request, policy_names
+from miniserve.benchmark.benchmark import BenchmarkCase
+from miniserve.benchmark.driver import Driver
+from miniserve.benchmark.workloads import (
     Constant,
     LengthProfile,
     LogNormal,
     Uniform,
     WorkloadSpec,
 )
-from mini_infer.visualizations.plots import (
+from miniserve.visualizations.plots import (
     HistogramPanel,
     Panel,
     Point,
@@ -45,7 +45,7 @@ from mini_infer.visualizations.plots import (
     step_series,
     timeline_grid,
 )
-from mini_infer.visualizations.timeline import timeline_lines
+from miniserve.visualizations.timeline import timeline_lines
 
 #: Guards a sweep against a configuration that cannot drain its pool.
 MAX_STEPS = 40_000

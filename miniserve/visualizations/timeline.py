@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from mini_infer.engine.engine import Engine, EngineStep
-from mini_infer.engine.request import Request
-from mini_infer.engine.scheduler import ScheduledKind
+from miniserve.engine.engine import Engine, EngineStep
+from miniserve.engine.request import Request
+from miniserve.engine.scheduler import ScheduledKind
 
 FILLED = "#"
 EMPTY = "."

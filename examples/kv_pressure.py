@@ -14,9 +14,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mini_infer import Engine, EngineConfig, Request, RunnerConfig
-from mini_infer.engine.engine import StepEventKind
-from mini_infer.visualizations import kv_pool_lines, timeline_lines
+from miniserve import Engine, EngineConfig, Request, RunnerConfig
+from miniserve.engine.engine import StepEventKind
+from miniserve.visualizations import kv_pool_lines, timeline_lines
 
 NUM_BLOCKS = 16
 BLOCK_SIZE = 8
@@ -90,7 +90,7 @@ def run_case(preemption: bool) -> None:
 
 def main() -> None:
     per_request = -(-(PROMPT + OUTPUT) // BLOCK_SIZE)
-    print("MiniServe phase 3 demo - KV pressure, admission control and recompute preemption")
+    print("MiniServe phase 3 demo: KV pressure, admission control and recompute preemption")
     print(
         f"workload: 4 requests, each {PROMPT} prompt + {OUTPUT} output tokens "
         f"= {PROMPT + OUTPUT} tokens needing {per_request} block(s) each"

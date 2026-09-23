@@ -9,7 +9,7 @@ the tensors the pool owns.
 **Pool layout.** KV lives in ``[num_layers, num_blocks, num_kv_heads, block_size,
 head_dim]`` tensors, one for keys and one for values. Logical block ``i`` of a
 request covers token positions ``[i * block_size, (i + 1) * block_size)`` and maps to
-a physical block through the request's :class:`~mini_infer.block_table.BlockTable`,
+a physical block through the request's :class:`~miniserve.block_table.BlockTable`,
 exactly as the manager sees it.
 
 **One forward per step, not one per request.** All the work in a step is flattened
@@ -24,7 +24,7 @@ chunk is written back into its blocks, and attention runs over prefix plus chunk
 gather is real; there is no fused paged-attention kernel, and the README says so.
 
 **Time.** :meth:`time_step` reports zero: the work has not happened yet at that point,
-and the engine's :class:`~mini_infer.clock.WallClock` measures the forward directly.
+and the engine's :class:`~miniserve.clock.WallClock` measures the forward directly.
 
 **Tokens.** A real forward samples the next token while computing the positions it was
 granted, so a decoding request always carries exactly one position whose KV is still
@@ -40,10 +40,10 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from mini_infer.config import EngineConfig
-from mini_infer.engine.request import Request
-from mini_infer.engine.scheduler import SchedulerOutput
-from mini_infer.runner.base import RunnerResult, TimingResult
+from miniserve.config import EngineConfig
+from miniserve.engine.request import Request
+from miniserve.engine.scheduler import SchedulerOutput
+from miniserve.runner.base import RunnerResult, TimingResult
 
 #: A tiny Llama with a real tokenizer: enough to exercise every code path in seconds.
 DEFAULT_MODEL = "hf-internal-testing/tiny-random-LlamaForCausalLM"

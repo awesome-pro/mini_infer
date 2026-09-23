@@ -1,6 +1,6 @@
 """Benchmark package: workloads, the driver that feeds them, and reporting."""
 
-from mini_infer.benchmark.benchmark import (
+from miniserve.benchmark.benchmark import (
     BenchmarkCase,
     Report,
     SweepRow,
@@ -10,8 +10,8 @@ from mini_infer.benchmark.benchmark import (
     write_csv,
     write_json,
 )
-from mini_infer.benchmark.driver import Driver, RunResult
-from mini_infer.benchmark.workloads import (
+from miniserve.benchmark.driver import Driver, RunResult
+from miniserve.benchmark.workloads import (
     OUTPUT_PROFILES,
     PROMPT_PROFILES,
     BurstArrivals,
